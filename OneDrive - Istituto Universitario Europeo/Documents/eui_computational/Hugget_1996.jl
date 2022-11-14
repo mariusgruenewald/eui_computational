@@ -176,15 +176,6 @@ function egm(prim::Primitives, z_grid::Vector{Float64}, ϕ::Vector{Float64}, r_g
 
     for (j,_) in enumerate(reverse(j_vector))
 
-        #if age > prim.J_r
-                
-        #    for (q,a) in enumerate(prim.a_grid)
-                # here, productivity is always equal across productivity states, therefore select one and omit loop
-        #        pol_a[j,:,q] = (1/r_g)*((ϕ[j] * prim.β * r_g)^(-1/prim.σ) * trans_mat[i,:]'*(
-        #            d_matrix[j,1] .+ r_g*a .+ pol_a[j+1,1,q]) - d_matrix[j,1] + a)
-        #    end
-
-        #else
         if j == prim.J
             for (i,_) in enumerate(z_grid)
                 for (q,a) in enumerate(prim.a_grid)
@@ -197,6 +188,7 @@ function egm(prim::Primitives, z_grid::Vector{Float64}, ϕ::Vector{Float64}, r_g
             Kg[j,i,:] = LinearInterpolation(prim.a_grid, pol_a[j,i,:], extrapolation_bc=Line())
     
             end
+            
         else
 
             for (i,_) in enumerate(z_grid)
@@ -243,3 +235,5 @@ Kg[70,1,:] .- prim.a_grid
 plot(j_vector, [hh_prod[:,1], hh_prod[:,2], hh_prod[:,3], hh_prod[:,4], hh_prod[:,5], hh_prod[:,6], hh_prod[:,7], hh_prod[:,8], hh_prod[:,9], hh_prod[:,10]])
 
 plot(prim.a_grid, [pol_a[71,1,:], pol_a[70,1,:], pol_a[71,5,:], pol_a[70,5,:]])
+
+function solve_model()
