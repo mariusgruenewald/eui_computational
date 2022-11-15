@@ -227,20 +227,21 @@ end
 a_grid, trans_mat, z_grid, Φ, s_j, Ψ, P, hh_prod, Agg_L, Agg_K, Wage, θ, b, Kg = solve_model()
 
 ## Calculate and Plot Results
+gr()
 savings = Kg[:,:,30] .- a_grid'
-sav_fig30 = plot(a_grid, savings',label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300)
+sav_fig30 = plot(a_grid, savings',label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300, title = "Savings Decision for 30")
 xaxis!(L"a")
 yaxis!(L"a' - a")
 savefig(sav_fig30,"savpol_fig30.png")
 
-savings60 = Kg[:,:,70] .- a_grid'
-sav_fig60 = plot(a_grid, savings60',label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300)
+savings70 = Kg[:,:,70] .- a_grid'
+sav_fig70 = plot(a_grid, savings70',label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300, title = "Savings Decision for 70")
 xaxis!(L"a")
 yaxis!(L"a' - a")
-savefig(sav_fig60,"savpol_fig60.png")
+savefig(sav_fig70,"savpol_fig70.png")
 
 prim = Primitives()
-prod_fig = plot(1:prim.J, hh_prod',label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300)
+prod_fig = plot(1:prim.J, hh_prod', label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300, title = "Productivity over the years")
 xaxis!(L"age j")
 yaxis!(L"e(j,z)")
 savefig(prod_fig,"efficiency.png")
