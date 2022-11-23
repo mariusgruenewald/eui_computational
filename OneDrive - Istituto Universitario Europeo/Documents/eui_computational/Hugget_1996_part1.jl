@@ -90,12 +90,11 @@ end
 
 function population_distribution(prim::Primitives)
     # survival rates
-    @unpack n, J, J_r = prim 
+    @unpack n, J, J_r = prim
 
-    tmp = CSV.read("LifeTables.txt", DataFrame)
+    tmp = CSV.read("LifeTables.txt", DataFrame, header=false)
     s_j = tmp[!,1]
     cum_prod = cumprod(s_j)
-    pushfirst!(cum_prod, 1.0);
     entry_pop = (1 + n).^(0:J)
     popul = ones(J)
     for j = 1:J
@@ -149,9 +148,9 @@ function firm(prim::Primitives, agg_l::Float64, r_g::Float64)
 
     @unpack α, δ = param
     # Aggregate Capital from FOC of firm
-    agg_k = ((r_g + δ)/α)^(1/(α-1)).*agg_l
+    agg_k = ( (r_g + δ)/(α*A) * (Agg_L)^(1/(1-α)) )^(1/(α-1))
     # Wage from other FOC
-    wage = (1-α).*(agg_k./agg_l).^(α)
+    wage = (1-α)*A*(agg_k)^(α)* (Agg_L)^(-α)
 
     return agg_k, wage
 end
@@ -214,7 +213,7 @@ function solve_model()
     Φ = invariant_prod_dist(prim, trans_mat)
     s_j, Ψ = population_distribution(prim)
     P, hh_prod = efficiency(prim, z_grid)
-    Agg_L = agg_labour(prim, Ψ, Φ, P)
+    Agg_L = sum(P.*Ψ)
     r_g = 0.02
     Agg_K, Wage = firm(prim, Agg_L, r_g)
     θ, b = government(prim, Ψ, Wage, Agg_L)
