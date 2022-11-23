@@ -312,14 +312,6 @@ function young_2010(prim::Primitives, a_grid::Vector{Float64}, Kg::Array{Float64
 
     dist_fin = reshape(dist_fin, (nz, na, J))
 
-    probst = ones(nz*na, na*nz, J)
-    err = 1
-    while err > 1e-10                
-       probst1 = probst.*Γ
-       err = maximum(abs.(probst1-probst))
-       probst = probst1
-    end
-
     return dist_fin
 end
 
@@ -343,6 +335,7 @@ end
 
 function solve_model()
 
+    # Step 1-6
     prim = Primitives()
     a_grid, trans_mat, z_grid = grids(prim)
     Φ, z_grid = invariant_prod_dist(prim, trans_mat, z_grid)
@@ -350,21 +343,27 @@ function solve_model()
     P, hh_prod = efficiency(prim, z_grid)
     Agg_L = sum(P.*Ψ)
 
+    # Guesses
     r_g = 0.05
     r_g_1 = 0.05
-    Agg_acc_b = 0
-    
+    T_g = 1.2
+
+    # Storage Step 7
     Agg_K = 0
     Wage = 0
     θ = 0
     b = 0
+
+    # Storage Step 8, 9 & 10
     Y = 0
     dist_fin = zeros(prim.nz, prim.na, prim.J)
-    err_r = 1
-    err_T = 1
-    T_g = 1.2
     Kg = zeros(prim.nz, prim.na, prim.J)
     Agg_K_hh = 0
+    Agg_acc_b = 0
+
+    # initiate errors
+    err_r = 1
+    err_T = 1
 
     while (err_r > 1e-5)
 
@@ -393,6 +392,7 @@ function solve_model()
     return trans_mat, Φ, s_j, Ψ, P, hh_prod, Agg_L, Agg_K, Wage, θ, b, Kg, dist_fin, Agg_K_hh, Agg_acc_b, r_g, Y
 end
 
+# Run the economy
 trans_mat, Φ, s_j, Ψ, P, hh_prod, Agg_L, Agg_K, Wage, θ, b, Kg, dist_fin, Agg_K_hh, Agg_acc_b, r_g, Y = solve_model()
 
 ## Calculate and Plot Results
@@ -448,14 +448,16 @@ medianplot = plot(1:prim.J, median_j)
 xaxis!("Age")
 yaxis!("Assets")
 title!("Median of Assets across Age")
-savefig(medianplot,"median.png")
+savefig(median,"median.png")
 
 
-function gini2(hist)
-    Swages = cumsum(hist[:,1].*hist[:,2])
-    Gwages = Swages[1]*hist[1,2] + sum(hist[2:end,2] .* (Swages[2:end]+Swages[1:end-1]))
+function gini(hist)
+    Swages = cumsum(hist)
+
+    Gwages = Swages[1]*hist[1] + sum(hist[2:end,2] .* (Swages[2:end]+Swages[1:end-1]))
     return 1 - Gwages/Swages[end]
 end
-gini2(hist)
+
+gini(hist)
 
 ##### Add Euler Equation error plot
