@@ -136,31 +136,18 @@ function efficiency(prim::Primitives, z_grid::Vector{Float64})
     return P, hh_prod
 end
 
-#function agg_labour(Ψ::Vector{Float64}, Φ, P::Vector{Float64}, z_grid::Vector{Float64})
-    # Aggregate labour supply
-
-    #j_labor = zeros(prim.J)
-    #for j = 1:prim.J
-    #    j_labor[j] = P[j]*Ψ[j]
-    #end
-
-    # Take inv. stationary distribution into account
-
-    Agg_L = Ψ'*P*(z_grid'*Φ)
-
-    return Agg_L
-#end
 
 function firm(prim::Primitives, Agg_L::Float64, r_g::Float64)
 
     @unpack α, δ, A = prim
     # Aggregate Capital from FOC of firm
-    agg_k = ( (r_g + δ)/(α*A) * (Agg_L)^(1/(1-α)) )^(1/(α-1))
+    agg_k = ( (r_g + δ)/((α*A)*(Agg_L)^(1-α)) )^(1/(α-1))
     # Wage from other FOC
     wage = (1-α)*A*(agg_k)^(α)* (Agg_L)^(-α)
 
     return agg_k, wage
 end
+
 
 function government(prim::Primitives, Ψ::Vector{Float64}, Wage::Float64, Agg_L::Float64)
     @unpack ω, J, J_r = prim
@@ -202,8 +189,9 @@ function egm(prim::Primitives, r_g::Float64, T_g::Float64, wage::Float64, b::Arr
 
             # Make sure boundaries are kept
             kg_temp[(kg_temp .< 0)] .= 0
-            kg_temp[(kg_temp .> a_grid[na])] .= a_grid[na]
+            #kg_temp[(kg_temp .> a_grid[na])] .= a_grid[na]
             Kg[z,:,j] = kg_temp
+
         end
 
 
@@ -216,7 +204,6 @@ end
 function simulation_shocks(prim::Primitives, trans_mat::Matrix{Float64}, n_sim::Int64)
 
     @unpack J, nz = prim
-
     z_path_index = ones(n_sim, J) # storage with first element set
 
     for sim in 1:n_sim
@@ -234,17 +221,19 @@ function capital_simulation(prim::Primitives, z_path_index::Matrix{Float64}, Kg:
 
     @unpack nz, na, J = prim
 
-    capital_path_index = ones(n_sim, J) # start with indexation corresponding
-    capital = zeros(n_sim, J) # initiate with zero capital
-    for sim in 1:n_sim
-        for age in 2:J-1
-            println(sim, age)
-            # Find grid point associated with the grid
-            capital[sim, age + 1] = Kg[z_path_index[n_sim, age], capital_path_indexage[n_sim, age], age]
+    capital_path = zeros(n_sim, J)
+    for j = 2:J
+        for n = 1:n_sim
+            nodes       = (a_grid,)
+            itp         = interpolate(nodes, Kg[Int.(z_path_index[n,j]),:,j-1], Gridded(Linear()))
+            extrp       = extrapolate(itp,Line())
+            capital_path[n,j]  = extrp(capital_path[n,j-1])
         end
     end
-    return capital_path_index, capital
+    return capital_path
 end
+
+
 
 
 function young_2010(prim::Primitives, a_grid::Vector{Float64}, Kg::Array{Float64, 3}, trans_mat::Matrix{Float64}, Φ::Vector{Float64})
@@ -324,7 +313,7 @@ function agg_capital_hh(prim::Primitives, dist_fin::Array{Float64, 3}, r_g::Floa
     agg_temp = zeros(J)
     agg_acc_b = zeros(J)
     for j in 1:J
-        agg_temp[j] = Ψ[j]*sum(sum(dist_fin[:,:,j].*Kg[:,:,j]))
+        agg_temp[j] = Ψ[j]*sum(dist_fin[:,:,j].*Kg[:,:,j])
         agg_acc_b[j] = sum(sum(((1 + r_g).*Kg[:,:,j].*dist_fin[:,:,j]) .* Ψ[j] .* (1 .- s_j[j])))
     end
 
@@ -333,7 +322,7 @@ function agg_capital_hh(prim::Primitives, dist_fin::Array{Float64, 3}, r_g::Floa
     return sum(agg_temp), sum(agg_acc_b), Y
 end
 
-function solve_model()
+function solve_model(r_g::Float64, T_g::Float64)
 
     # Step 1-6
     prim = Primitives()
@@ -342,11 +331,6 @@ function solve_model()
     s_j, Ψ = population_distribution(prim)
     P, hh_prod = efficiency(prim, z_grid)
     Agg_L = sum(P.*Ψ)
-
-    # Guesses
-    r_g = 0.05
-    r_g_1 = 0.05
-    T_g = 1.2
 
     # Storage Step 7
     Agg_K = 0
@@ -358,42 +342,51 @@ function solve_model()
     Y = 0
     dist_fin = zeros(prim.nz, prim.na, prim.J)
     Kg = zeros(prim.nz, prim.na, prim.J)
-    Agg_K_hh = 0
-    Agg_acc_b = 0
+    agg_k_hh = 0
+    T_g_1 = 0
 
     # initiate errors
-    err_r = 1
-    err_T = 1
+    count_r = 0
+    err_r  = 1.0
 
-    while (err_r > 1e-5)
+    while (err_r > 1e-5) && count_r < 1000
 
-        r_g = 0.5*(r_g_1+r_g)
+        # New Firm and Government decision
         Agg_K, Wage = firm(prim, Agg_L, r_g)
         θ, b = government(prim, Ψ, Wage, Agg_L)
 
-        while (err_T > 1e-5)
+        count_t = 0
+        err_t   = 1.0
+        while (err_t > 1e-5) && count_t < 1000
 
+            count_t += 1
+            # Get policy function with updated r_g & T_g
             Kg = egm(prim, r_g, T_g, Wage, b, hh_prod, θ, s_j, trans_mat, z_grid, a_grid)
-            # Get iteration indexing right => get iter variable outside of loop to access
+            
+            # Calculate distribution with new policy function
             dist_fin = young_2010(prim, a_grid, Kg, trans_mat, Φ)
-            Agg_K_hh, Agg_acc_b, Y = agg_capital_hh(prim, dist_fin, r_g, Kg, Ψ, s_j, Agg_L)
-            r_g_1 = prim.α * ((Agg_K_hh)^(prim.α - 1) * (Agg_L)^(1 - prim.α)) - prim.δ
-
-            err_T = abs(Agg_acc_b- T_g)
-            T_g = copy(Agg_acc_b)
-            #println(Agg_K_hh)
+            # Get aggregate capital supply by HH and aggregate accidental bequests
+            Agg_K_hh, T_g_1, Y = agg_capital_hh(prim, dist_fin, r_g, Kg, Ψ, s_j, Agg_L)
+            agg_k_hh = copy(Agg_K_hh)
+            # calculate error and update guess
+            err_t = abs(T_g_1- T_g)
+            T_g = copy(T_g_1)
         end 
+
+        # Back out implied interst rate
+        r_g_1 = prim.α*(agg_k_hh^(prim.α-1))*(Agg_L^(1-prim.α)) - prim.δ            
+        err_r = abs(r_g_1-r_g)    
+        println("err_r = ", round.(err_r; digits=6)," at iteration ", count_r," with r_g_1 = ",round.(r_g_1; digits=4)," and r_g = ",round.(r_g; digits=4))                 
+        r_g = 0.5*r_g + 0.5*r_g_1
         
-        println(Agg_K_hh)
-        # error
-        err_r = abs(r_g_1-r_g)
+
     end 
 
-    return trans_mat, Φ, s_j, Ψ, P, hh_prod, Agg_L, Agg_K, Wage, θ, b, Kg, dist_fin, Agg_K_hh, Agg_acc_b, r_g, Y
+    return a_grid, Φ, s_j, Ψ, P, hh_prod, Agg_L, Agg_K, Wage, θ, b, Kg, dist_fin, Agg_K_hh, T_g_1, r_g, Y
 end
 
 # Run the economy
-trans_mat, Φ, s_j, Ψ, P, hh_prod, Agg_L, Agg_K, Wage, θ, b, Kg, dist_fin, Agg_K_hh, Agg_acc_b, r_g, Y = solve_model()
+a_grid, Φ, s_j, Ψ, P, hh_prod, Agg_L, Agg_K, Wage, θ, b, Kg, dist_fin, Agg_K_hh, T_g_1, r_g, Y = solve_model(0.02, 1.2)
 
 ## Calculate and Plot Results
 gr()
@@ -415,7 +408,6 @@ xaxis!(L"age j")
 yaxis!(L"e(j,z)")
 savefig(prod_fig,"efficiency.png")
 
-
 # Getting the Histogram of capital
 hist = zeros(prim.na)
 for i in 1:prim.na
@@ -428,36 +420,100 @@ yaxis!("Probability")
 title!("Histogram of Assets")
 savefig(hist_cap,"histcap.png")
 
+###### Calculate cross sectional distribution in absolute values
+
+csd = Kg.*dist_fin.*Agg_K_hh
+
 mean_j = zeros(prim.J)
-median_j = zeros(prim.J)
+median_j = zeros(prim.na)
+median_idx = zeros(prim.J)
 quant_25 = zeros(prim.J)
 quant_75 = zeros(prim.J)
 
-for j in 1:prim.J
-    mean_j[j] = mean(dist_fin[:,:,j].*Kg[:,:,j])
-    median_j[j] = median(dist_fin[:,:,j].*Kg[:,:,j])
-    #quant_25[j] =  quantile!(dist_fin[:,:,j].*Kg[:,:,j], 0.25)
-    #quant_75[j] =  quantile!(dist_fin[:,:,j].*Kg[:,:,j], 0.75)
-    #println(median(dist_fin[:,:,j].*Kg[:,:,j]))
+for j in 1:prim.J-1
+
+    mean_j[j] = sum(dist_fin[:,:,j].*Kg[:,:,j])
+    median_j = cumsum(vec(sum(dist_fin[:,:,j], dims=1)))
+    median_idx[j] = a_grid[findfirst(x -> x >= 0.5, median_j)]
+    quant_25[j] = a_grid[findfirst(x -> x >= 0.25, median_j)]
+    quant_75[j] = a_grid[findfirst(x -> x >= 0.75, median_j)]
+
 end
 
-quantile!(dist_fin[:,3,10].*Kg[:,3,10], 0.25)
+#nodes = (median_idx,) # Define the nodes
+#itp = interpolate(nodes, a_grid, Gridded(Linear())) # Perform Interpolations
+#etpf = extrapolate(itp, Line()) # Set up environment for extrapolation
+#test = etpf(a_grid) 
 
-plot(1:prim.J, mean_j)
-medianplot = plot(1:prim.J, median_j)
+medianplot = plot(1:prim.J, [mean_j median_idx quant_25 quant_75], label = ["Mean" "Median" "25 Percentile" "75 Percentile"])
 xaxis!("Age")
 yaxis!("Assets")
 title!("Median of Assets across Age")
-savefig(median,"median.png")
+savefig(medianplot,"distribution.png")
 
+##### Calculate Gini Coefficient - still doesn't work
 
-function gini(hist)
-    Swages = cumsum(hist)
+function Gini(x::Array{Float64})
 
-    Gwages = Swages[1]*hist[1] + sum(hist[2:end,2] .* (Swages[2:end]+Swages[1:end-1]))
-    return 1 - Gwages/Swages[end]
+    n = length(x)
+    datadistarray_sorted = sort(x)
+    gini_idx = 2*(sum(collect(1:n).*datadistarray_sorted))/(n*sum(datadistarray_sorted))-1
+
+    return gini_idx
 end
 
-gini(hist)
-
+Gini(hist)
+test = sum(dist_fin[:,:,40])
 ##### Add Euler Equation error plot
+
+
+function calc_EEE(prim::Primitives, na_precise::Int64, Kg::Array{Float64,3}, r_g::Float64, T_g::Float64, 
+    θ::Float64, hh_prod::Matrix{Float64}, trans_mat::Matrix{Float64}, s_j::Vector{Float64}, Wage::Float64, b::Vector{Float64})
+    
+    @unpack minval, maxval, nz, na, J, J_r, β, σ, = prim
+    
+    # make fine grid
+    f_grid = zeros(na_precise)
+    f_grid = collect(range(minval, maxval, length=na_precise))
+
+    # interpolate g_pol at nkk_precise points 
+    EE_error  = zeros(nz,na_precise,J)
+    
+    for j = 1:J-1
+        g_prec    = zeros(nz,na_precise)
+        for z = 1:nz
+
+            # interpolate on fine grid
+            nodes   = (a_grid,)
+            itp     = interpolate(nodes, Kg[z,:,j], Gridded(Linear()))
+            extrp  = extrapolate(itp,Line())
+            g_prec[z,:] = extrp(f_grid)
+        
+            g_p_prec    = zeros(nz,na_precise)
+            for z_p = 1:nz
+                # interpolate the future decision
+                nodes_g  = (a_grid,)
+                itp_g    = interpolate(nodes_g, Kg[z_p,:,j+1], Gridded(Linear()))
+                extrp_g  = extrapolate(itp_g,Line())
+                g_p_prec[z_p,:]=extrp_g(g_prec[z,:])
+            end
+
+            # non financial income
+            d_0 = (1-θ)*hh_prod[z,j]  *Wage + b[j] + T_g
+            d_1 = (1-θ)*hh_prod[:,j+1]*Wage .+ b[j+1] .+ T_g
+            for a = 1:na_precise
+                # consumption today
+                c  = f_grid[a]*(1+r_g) + d_0 - g_prec[z,a]
+                #consumption tomorrow
+                Ec_p = β*(1+r_g)*s_j[j]*trans_mat[z,:]'*((g_prec[z,a]*(1+r_g)*ones(nz) + d_1 - g_p_prec[:,a]).^(-σ))
+                # use formula to calc realtive EEE in terms of consumption 
+                EE_error[z,a,j] = log(abs(c - Ec_p.^(-1/σ))/c)
+            end
+        end
+    end
+    return EE_error, f_grid
+end
+
+EE_error, f_grid = calc_EEE(prim, 10000, Kg, r_g, T_g, θ, hh_prod, trans_mat, s_j, Wage, b)
+
+plot(f_grid, EE_error[:,:,20]')

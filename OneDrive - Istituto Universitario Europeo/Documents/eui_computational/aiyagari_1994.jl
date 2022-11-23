@@ -121,7 +121,7 @@ function VFI(prim::Primitive, wage::Float64, r::Float64, a_grid::Vector{Float64}
             util = util_(prim, c) # calculate util
             util[findall(x-> x<=0, c)] .= -1000000 # replace unreasonable combinations
             
-            v_temp = util + β.* c * v_next # value function
+            v_temp = util + β.* trans_mat * v_next # value function
             v_now[:,a] = maximum(v_temp, dims=2) # find max
             
             for z in 1:nz
@@ -141,43 +141,89 @@ end
 function EGM(prim::Primitive, wage::Float64, a_grid::Vector{Float64})
 
     @unpack nz, na, β, σ, z_grid, trans_mat  = prim
-    kpol = zeros(nz,na)
-    cpol = zeros(nz,na)
+    kpol_egm = zeros(nz,na)
+    cpol = ones(nz,na)
     tol_pol = 0.00001
+    err  = 1
+    #cpol = (z_grid'*wage .+ r*a_grid)
+    while err > tol_pol
 
-    for (z,_) in enumerate(z_grid)
-
-        err  = 1
-        cpol[z,:] = (z_grid[z]*wage .+ r*a_grid)
-
-        while err > tol_pol
-
-            Ec = trans_mat*cpol[z,:].^(-σ)
-            
-            c_impl = ((1+r)*β*Ec).^(-1/σ)
-            
-            k_impl = (c_impl + a_grid .- z_grid[z]*wage)/(1+r)
+        Ec = trans_mat * (cpol).^(-σ)
+        
+        c_impl = ((1+r)*β*Ec).^(-1/σ)
+        
+        k_impl =  (c_impl + ones(nz,1).*a_grid' - z_grid*wage*ones(1,na))./(1+r)
                     
-            nodes = (k_impl,) # Define the nodes
+        for (z,_) in enumerate(z_grid)
+            nodes = (vec(k_impl[z,:]),) # Define the nodes
             itp = interpolate(nodes, a_grid, Gridded(Linear())) # Perform Interpolations
             etpf = extrapolate(itp, Line()) # Set up environment for extrapolation
-            kpol[z,:] = etpf(a_grid) # Perform extrapolation
+            kpol_egm[z,:] = etpf(a_grid) # Perform extrapolation
+        end
 
-            # Make sure boundaries are kept
-            kpol[(kpol .< 0)] .= 0
-            kpol[(kpol .> a_grid[na])] .= a_grid[na]
+        # Make sure boundaries are kept
+        kpol_egm[(kpol_egm .< 0)] .= 0
+        kpol_egm[(kpol_egm .> a_grid[na])] .= a_grid[na]
 
 
-            cpol1 = (1+r)*a_grid - kpol[z,:] .+ z_grid[z]'*wage 
-            err = max(max(abs(cpol-cpol1)))
-            cpol[z,:] = copy(cpol1)
+        cpol1 = (1+r)*ones(nz,1).*a_grid' - kpol_egm[:,:] + z_grid*wage*ones(1,na) 
+        err = maximum(abs.(cpol-cpol1))
+        cpol = copy(cpol1)
+
+    end
+
+    return kpol_egm, cpol
+end
+
+function young_2010(prim::Primitive, kpol::Array{Float64, 3}, a_grid::Vector{Float64})
+
+    @unpack nz, na, trans_mat = prim
+
+    ind_low = ones(nz,na)
+    for a in 2:na
+        for z in 1:nz
+            ind_low[z,findall(x -> x >= a_grid[a], kpol[z,:])] .=  a
+            ind_low[z,findall(x -> x >= na, ind_low[z,:])] .=  na-1
+        end
+    end
+    
+    ind_up = ind_low .+ 1
+
+    wabove = ones(nz, na)
+    wbelow = ones(nz, na)
+
+    for z in 1:nz
+        for i in 1:na
+            wabove[z,i] =  (kpol[z,i] - a_grid[Int(ind_low[z,i])]) / (a_grid[Int(ind_low[z,i]) + 1] - a_grid[Int(ind_low[z,i])])
+            wabove[z,i] = min(wabove[z,i],1)
+            wabove[z,i] = max(wabove[z,i],0)
+            wbelow[z,i] = 1-wabove[z,i]
+        end
+    end 
+
+    Γ = zeros(nz*na, nz*na)
+
+
+    for z in 1:nz
+        for i in 1:na
+            Γ[Int.((i-1)*nz+z), Int.((ind_low[z,i]-1)*nz+1:ind_low[z,i]*nz)] = wbelow[z,i]*trans_mat[z,:]
+            Γ[Int.((i-1)*nz+z), Int.((ind_up[z,i]-1)*nz+1:ind_up[z,i]*nz)] = wabove[z,i]*trans_mat[z,:]
         end
     end
 
-    return kpol, cpol
+    probst = (1/(nz*na))*ones(1,nz*na)
+    err = 1                      
+    while err > 1e-5      
+       probst1 = probst*Γ          
+       err = maximum(abs.(probst1-probst))
+       probst = probst1
+    end
+
+
+    dist_fin = reshape(probst, (nz, na))
+
+    return dist_fin
 end
-
-
 
 function bisection(prim::Primitive, VFI::Int64)
     
@@ -223,7 +269,7 @@ function bisection(prim::Primitive, VFI::Int64)
 end
 
 
-function solve_model()
+function solve_model(VFI_bool::Float64)
 
     prim = Primitive()
     Phi_sd, L_Agg = agg_labour(prim)
@@ -231,22 +277,25 @@ function solve_model()
     r = 0.03
     k_firm, wage = firm_decision(prim, L_Agg, r)
     a_grid = asset_grid(prim, wage, r)
-    #if VFI == 1
+    if VFI_bool == 1
         policy_a, v_now = VFI(prim, wage, r, a_grid)
         cons_levels = prim.z_grid*wage .+ (1+r)*policy_a .- a_grid'
-    #else
-    #    kpol, cpol = EGM(prim, wage, a_grid)
-
-    #end
-
-    return Phi_sd, L_Agg, k_firm, wage, a_grid, policy_a, v_now, cons_levels
+        return policy_a, v_now, cons_levels
+    else
+        kpol, cpol = EGM(prim, wage, a_grid)
+        return kpol,cpol
+    end
 end
 
-Phi_sd, L_Agg, k_firm, wage, a_grid, policy_a, v_now, cons_levels = solve_model()
-
+policy_a, v_now, cons_levels = solve_model(1.0)
+kpol,cpol = solve_model(0.0)
 gr()
-value_vfi = plot(a_grid, [v_now[1,:], v_now[2,:]], label = [L"z_1", L"z_2"], dpi=300, title = "Value Functions")
+value_vfi = plot(a_grid, [v_now[1,:], v_now[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Value Functions")
 cons_vfi = plot(a_grid, [cons_levels[1,:], cons_levels[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Cons Functions")
 pol_vfi = plot(a_grid, [policy_a[1,:], policy_a[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Policy Functions")
+
+
+cons = plot(a_grid, [cpol[1,:], cpol[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Cons Functions")
+pol_egm = plot(a_grid, [kpol[1,:], kpol[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Policy Functions")
 
 
