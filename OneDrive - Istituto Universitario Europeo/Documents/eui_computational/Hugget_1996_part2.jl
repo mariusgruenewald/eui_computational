@@ -350,7 +350,6 @@ function solve_model(r_g::Float64, T_g::Float64)
     err_r  = 1.0
 
     while (err_r > 1e-5) && count_r < 1000
-
         # New Firm and Government decision
         Agg_K, Wage = firm(prim, Agg_L, r_g)
         θ, b = government(prim, Ψ, Wage, Agg_L)
@@ -358,6 +357,7 @@ function solve_model(r_g::Float64, T_g::Float64)
         count_t = 0
         err_t   = 1.0
         while (err_t > 1e-5) && count_t < 1000
+
 
             count_t += 1
             # Get policy function with updated r_g & T_g
@@ -390,7 +390,7 @@ a_grid, Φ, s_j, Ψ, P, hh_prod, Agg_L, Agg_K, Wage, θ, b, Kg, dist_fin, Agg_K_
 
 ## Calculate and Plot Results
 gr()
-savings = Kg[:,:,30] .- a_grid'
+savings = Kg[:,:,40] .- a_grid'
 sav_fig30 = plot(a_grid, savings',label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300, title = "Savings Decision for 30")
 xaxis!(L"a")
 yaxis!(L"a' - a")
@@ -408,6 +408,13 @@ xaxis!(L"age j")
 yaxis!(L"e(j,z)")
 savefig(prod_fig,"efficiency.png")
 
+dist_graph_40 = plot(a_grid, dist_fin[:,:,40]', label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300, title = "Distribution at Age 40")
+xaxis!("Capital Grid")
+yaxis!("Density at age 40")
+savefig(dist_graph_40,"dist_40.png")
+
+plot(a_grid, dist_fin[:,:,60]', label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300, title = "Distribution at Age 60")
+
 # Getting the Histogram of capital
 hist = zeros(prim.na)
 for i in 1:prim.na
@@ -422,30 +429,23 @@ savefig(hist_cap,"histcap.png")
 
 ###### Calculate cross sectional distribution in absolute values
 
-csd = Kg.*dist_fin.*Agg_K_hh
-
 mean_j = zeros(prim.J)
-median_j = zeros(prim.na)
-median_idx = zeros(prim.J)
+cumsum_j = zeros(prim.na)
+median_j = zeros(prim.J)
 quant_25 = zeros(prim.J)
 quant_75 = zeros(prim.J)
 
 for j in 1:prim.J-1
 
     mean_j[j] = sum(dist_fin[:,:,j].*Kg[:,:,j])
-    median_j = cumsum(vec(sum(dist_fin[:,:,j], dims=1)))
-    median_idx[j] = a_grid[findfirst(x -> x >= 0.5, median_j)]
-    quant_25[j] = a_grid[findfirst(x -> x >= 0.25, median_j)]
-    quant_75[j] = a_grid[findfirst(x -> x >= 0.75, median_j)]
+    cumsum_j = cumsum(vec(sum(dist_fin[:,:,j], dims=1)))
+    median_j[j] = a_grid[findfirst(x -> x >= 0.5, cumsum_j)]
+    quant_25[j] = a_grid[findfirst(x -> x >= 0.25, cumsum_j)]
+    quant_75[j] = a_grid[findfirst(x -> x >= 0.75, cumsum_j)]
 
 end
 
-#nodes = (median_idx,) # Define the nodes
-#itp = interpolate(nodes, a_grid, Gridded(Linear())) # Perform Interpolations
-#etpf = extrapolate(itp, Line()) # Set up environment for extrapolation
-#test = etpf(a_grid) 
-
-medianplot = plot(1:prim.J, [mean_j median_idx quant_25 quant_75], label = ["Mean" "Median" "25 Percentile" "75 Percentile"])
+medianplot = plot(1:prim.J, [mean_j median_j quant_25 quant_75], label = ["Mean" "Median" "25 Percentile" "75 Percentile"])
 xaxis!("Age")
 yaxis!("Assets")
 title!("Median of Assets across Age")
@@ -453,19 +453,65 @@ savefig(medianplot,"distribution.png")
 
 ##### Calculate Gini Coefficient - still doesn't work
 
-function Gini(x::Array{Float64})
+function Gini(Kg, dist_fin, na=100)
 
-    n = length(x)
-    datadistarray_sorted = sort(x)
-    gini_idx = 2*(sum(collect(1:n).*datadistarray_sorted))/(n*sum(datadistarray_sorted))-1
+    long_pol = vec(reshape(Kg[:,:,1], (1, 500)))
+    long_dist = vec(reshape(dist_fin[:,:,1], (1, 500)))
+    argsort = sortperm(long_pol)
+    long_pol = sort(long_pol)
+    long_dist = long_dist[argsort]
 
-    return gini_idx
+    cumulative=zeros(na+1)
+    for i=1:na
+        cumulative[i+1] = cumulative[i] + long_pol[i]*long_dist[i]
+    end
+
+    temp=zeros(na,1)
+    for i=1:na
+        temp[i]=(cumulative[i+1]+cumulative[i])*long_dist[i]
+    end
+    gini = 1-sum(temp)/cumulative[na+1]
+
+    return gini
 end
 
-Gini(hist)
-test = sum(dist_fin[:,:,40])
-##### Add Euler Equation error plot
+Gini_total = Gini(sum(Kg, dims=3), sum(dist_fin, dims=3))
 
+function Gini_2(Kg, dist_fin, j, na=100)
+
+    long_pol = vec(reshape(Kg[:,:, j], (1, 500)))
+    long_dist = vec(reshape(dist_fin[:,:, j], (1, 500)))
+    argsort = sortperm(long_pol)
+    long_pol = sort(long_pol)
+    long_dist = long_dist[argsort]
+
+    cumulative=zeros(na+1)
+    for i=1:na
+        cumulative[i+1] = cumulative[i] + long_pol[i]*long_dist[i]
+    end
+
+    temp=zeros(na,1)
+    for i=1:na
+        temp[i]=(cumulative[i+1]+cumulative[i])*long_dist[i]
+    end
+    gini = 1-sum(temp)/cumulative[na+1]
+
+    return gini
+end
+
+gini_j = zeros(prim.J)
+
+for j in 1:prim.J
+    gini_j[j] = Gini_2(Kg, dist_fin, j)
+end
+
+age_gini = plot(1:prim.J, gini_j, dpi=300, legend = false)
+xaxis!("Age")
+yaxis!("Gini Index")
+title!("Gini Index across the Ages")
+savefig(age_gini,"age_gini.png")
+
+##### Add Euler Equation error plot
 
 function calc_EEE(prim::Primitives, na_precise::Int64, Kg::Array{Float64,3}, r_g::Float64, T_g::Float64, 
     θ::Float64, hh_prod::Matrix{Float64}, trans_mat::Matrix{Float64}, s_j::Vector{Float64}, Wage::Float64, b::Vector{Float64})
@@ -478,9 +524,10 @@ function calc_EEE(prim::Primitives, na_precise::Int64, Kg::Array{Float64,3}, r_g
 
     # interpolate g_pol at nkk_precise points 
     EE_error  = zeros(nz,na_precise,J)
-    
+
     for j = 1:J-1
-        g_prec    = zeros(nz,na_precise)
+
+        g_prec = zeros(nz,na_precise)
         for z = 1:nz
 
             # interpolate on fine grid
@@ -488,7 +535,7 @@ function calc_EEE(prim::Primitives, na_precise::Int64, Kg::Array{Float64,3}, r_g
             itp     = interpolate(nodes, Kg[z,:,j], Gridded(Linear()))
             extrp  = extrapolate(itp,Line())
             g_prec[z,:] = extrp(f_grid)
-        
+
             g_p_prec    = zeros(nz,na_precise)
             for z_p = 1:nz
                 # interpolate the future decision
@@ -503,11 +550,11 @@ function calc_EEE(prim::Primitives, na_precise::Int64, Kg::Array{Float64,3}, r_g
             d_1 = (1-θ)*hh_prod[:,j+1]*Wage .+ b[j+1] .+ T_g
             for a = 1:na_precise
                 # consumption today
-                c  = f_grid[a]*(1+r_g) + d_0 - g_prec[z,a]
+                c  = (f_grid[a]*(1+r_g) + d_0 - g_prec[z,a])
                 #consumption tomorrow
                 Ec_p = β*(1+r_g)*s_j[j]*trans_mat[z,:]'*((g_prec[z,a]*(1+r_g)*ones(nz) + d_1 - g_p_prec[:,a]).^(-σ))
                 # use formula to calc realtive EEE in terms of consumption 
-                EE_error[z,a,j] = log(abs(c - Ec_p.^(-1/σ))/c)
+                EE_error[z,a,j] = log(abs(c.^(-σ) - Ec_p)/c)
             end
         end
     end
@@ -516,4 +563,28 @@ end
 
 EE_error, f_grid = calc_EEE(prim, 10000, Kg, r_g, T_g, θ, hh_prod, trans_mat, s_j, Wage, b)
 
-plot(f_grid, EE_error[:,:,20]')
+# Plots with partial equilibrium and starting guesses
+plot_pe_20 = plot(f_grid, EE_error[:,:,20]', label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300)
+xaxis!("Fine capital grid")
+yaxis!("Euler Equation Error")
+title!("Euler Equation Error PE at age 20")
+savefig(plot_pe_20,"pe_20.png")
+
+plot_pe_60 = plot(f_grid, EE_error[:,:,60]', label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300)
+xaxis!("Fine capital grid")
+yaxis!("Euler Equation Error")
+title!("Euler Equation Error PE at age 60")
+savefig(plot_pe_60,"pe_60.png")
+
+# Plots with general equilibrium results
+plot_ge_20 = plot(f_grid, EE_error[:,:,20]', label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300)
+xaxis!("Fine capital grid")
+yaxis!("Euler Equation Error")
+title!("Euler Equation Error GE at age 20")
+savefig(plot_ge_20,"ge_20.png")
+
+plot_ge_60 = plot(f_grid, EE_error[:,:,60]', label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300)
+xaxis!("Fine capital grid")
+yaxis!("Euler Equation Error")
+title!("Euler Equation Error GE at age 60")
+savefig(plot_ge_60,"ge_60.png")
