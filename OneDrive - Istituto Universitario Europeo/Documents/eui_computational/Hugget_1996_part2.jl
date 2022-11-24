@@ -168,17 +168,19 @@ function egm(prim::Primitives, r_g::Float64, T_g::Float64, wage::Float64, b::Arr
     @unpack nz, na, J, J_r, β, σ  = prim
 
     Kg = zeros(nz, na, J)
+    d1 = zeros(nz, J)
+
     for j in reverse(1:J-1)
 
         for (z,_) in enumerate(z_grid)
 
-            d1 = (1-θ)*e[z,j]*wage + b[j] + T_g
+            d1[z,j] = (1-θ)*e[z,j]*wage + b[j] + T_g
             d2 = (1-θ)*e[:,j+1]*wage .+ b[j+1] .+ T_g
 
             pol_a = zeros(na)
             for (q,a) in enumerate(a_grid)
 
-                pol_a[q] =(( β*(1+r_g)*s_j[j] * trans_mat[z,:]'*((1+r_g)*a .+ d2 - Kg[:,q,j+1]).^(-σ))^(-1/σ) + a - d1)/(1+r_g)
+                pol_a[q] =(( β*(1+r_g)*s_j[j] * trans_mat[z,:]'*((1+r_g)*a .+ d2 - Kg[:,q,j+1]).^(-σ))^(-1/σ) + a - d1[z,j])/(1+r_g)
                 
             end
                     
@@ -197,7 +199,7 @@ function egm(prim::Primitives, r_g::Float64, T_g::Float64, wage::Float64, b::Arr
 
     end
 
-    return Kg
+    return Kg, d1
 end
 
 
@@ -344,6 +346,7 @@ function solve_model(r_g::Float64, T_g::Float64)
     Kg = zeros(prim.nz, prim.na, prim.J)
     agg_k_hh = 0
     T_g_1 = 0
+    d1 = zeros(prim.nz, prim.J)
 
     # initiate errors
     count_r = 0
@@ -361,7 +364,7 @@ function solve_model(r_g::Float64, T_g::Float64)
 
             count_t += 1
             # Get policy function with updated r_g & T_g
-            Kg = egm(prim, r_g, T_g, Wage, b, hh_prod, θ, s_j, trans_mat, z_grid, a_grid)
+            Kg, d1 = egm(prim, r_g, T_g, Wage, b, hh_prod, θ, s_j, trans_mat, z_grid, a_grid)
             
             # Calculate distribution with new policy function
             dist_fin = young_2010(prim, a_grid, Kg, trans_mat, Φ)
@@ -382,16 +385,16 @@ function solve_model(r_g::Float64, T_g::Float64)
 
     end 
 
-    return a_grid, Φ, s_j, Ψ, P, hh_prod, Agg_L, Agg_K, Wage, θ, b, Kg, dist_fin, Agg_K_hh, T_g_1, r_g, Y
+    return a_grid, Φ, s_j, Ψ, P, hh_prod, d1, Agg_L, Agg_K, Wage, θ, b, Kg, dist_fin, Agg_K_hh, T_g_1, r_g, Y
 end
 
 # Run the economy
-a_grid, Φ, s_j, Ψ, P, hh_prod, Agg_L, Agg_K, Wage, θ, b, Kg, dist_fin, Agg_K_hh, T_g_1, r_g, Y = solve_model(0.02, 1.2)
+a_grid, Φ, s_j, Ψ, P, hh_prod, d1, Agg_L, Agg_K, Wage, θ, b, Kg, dist_fin, Agg_K_hh, T_g_1, r_g, Y = solve_model(0.02, 1.2)
 
 ## Calculate and Plot Results
 gr()
-savings = Kg[:,:,40] .- a_grid'
-sav_fig30 = plot(a_grid, savings',label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300, title = "Savings Decision for 30")
+savings = Kg[:,:,30] .- a_grid'
+sav_fig30 = plot(a_grid, savings', label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300, title = "Savings Decision for 30")
 xaxis!(L"a")
 yaxis!(L"a' - a")
 savefig(sav_fig30,"savpol_fig30.png")
@@ -408,10 +411,10 @@ xaxis!(L"age j")
 yaxis!(L"e(j,z)")
 savefig(prod_fig,"efficiency.png")
 
-dist_graph_40 = plot(a_grid, dist_fin[:,:,40]', label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300, title = "Distribution at Age 40")
+dist_graph_20 = plot(a_grid, dist_fin[:,:,20]', label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300, title = "Distribution at Age 20")
 xaxis!("Capital Grid")
-yaxis!("Density at age 40")
-savefig(dist_graph_40,"dist_40.png")
+yaxis!("Density at age 20")
+savefig(dist_graph_20,"dist_20.png")
 
 plot(a_grid, dist_fin[:,:,60]', label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300, title = "Distribution at Age 60")
 
@@ -445,37 +448,33 @@ for j in 1:prim.J-1
 
 end
 
-medianplot = plot(1:prim.J, [mean_j median_j quant_25 quant_75], label = ["Mean" "Median" "25 Percentile" "75 Percentile"])
+medianplot = plot(1:prim.J, [mean_j median_j quant_25 quant_75], dpi=300, label = ["Mean" "Median" "25 Percentile" "75 Percentile"])
 xaxis!("Age")
 yaxis!("Assets")
-title!("Median of Assets across Age")
+vline!([41], label= "Retirement", color="black", line=(:dot,2))
+title!("Distributional Aspects of Assets across Age")
 savefig(medianplot,"distribution.png")
 
-##### Calculate Gini Coefficient - still doesn't work
+##### Calculate Gini Coefficient
+Kg_gini = sum(Kg, dims=[1,3])
+dist_fin_gini = sum(dist_fin, dims=[1,3])./sum(dist_fin)
+long_pol = vec(Kg_gini)
+long_dist = vec(dist_fin_gini)
+argsort = sortperm(long_pol)
+long_pol = sort(long_pol)
+long_dist = long_dist[argsort]
 
-function Gini(Kg, dist_fin, na=100)
-
-    long_pol = vec(reshape(Kg[:,:,1], (1, 500)))
-    long_dist = vec(reshape(dist_fin[:,:,1], (1, 500)))
-    argsort = sortperm(long_pol)
-    long_pol = sort(long_pol)
-    long_dist = long_dist[argsort]
-
-    cumulative=zeros(na+1)
-    for i=1:na
-        cumulative[i+1] = cumulative[i] + long_pol[i]*long_dist[i]
-    end
-
-    temp=zeros(na,1)
-    for i=1:na
-        temp[i]=(cumulative[i+1]+cumulative[i])*long_dist[i]
-    end
-    gini = 1-sum(temp)/cumulative[na+1]
-
-    return gini
+cumulative=zeros(na+1)
+for i=1:na
+    cumulative[i+1] = cumulative[i] + long_pol[i]*long_dist[i]
 end
 
-Gini_total = Gini(sum(Kg, dims=3), sum(dist_fin, dims=3))
+temp=zeros(na,1)
+for i=1:na
+    temp[i]=(cumulative[i+1]+cumulative[i])*long_dist[i]
+end
+gini = 1-sum(temp)/cumulative[na+1]
+
 
 function Gini_2(Kg, dist_fin, j, na=100)
 
@@ -509,6 +508,7 @@ age_gini = plot(1:prim.J, gini_j, dpi=300, legend = false)
 xaxis!("Age")
 yaxis!("Gini Index")
 title!("Gini Index across the Ages")
+vline!([41], label= "Retirement", color="black", line=(:dot,2))
 savefig(age_gini,"age_gini.png")
 
 ##### Add Euler Equation error plot
@@ -588,3 +588,70 @@ xaxis!("Fine capital grid")
 yaxis!("Euler Equation Error")
 title!("Euler Equation Error GE at age 60")
 savefig(plot_ge_60,"ge_60.png")
+
+
+
+# Plot some more results
+plot_income = plot(1:prim.J-1, d1[:,1:70]', label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300, title = "Income")
+xaxis!("Age")
+yaxis!("Income")
+vline!([41], label= "Retirement", color="black", line=(:dot,2))
+savefig(plot_income,"income.png")
+
+d1_gini = zeros(prim.J)
+
+for j in 1:prim.J 
+
+    d1_red = d1[:,j]
+    prod_dist = Φ
+    long_pol = vec(d1_red)
+    long_dist = vec(prod_dist)
+    argsort = sortperm(long_pol)
+    long_pol = sort(long_pol)
+    long_dist = long_dist[argsort]
+
+    cumulative=zeros(length(d1_red)+1)
+    for i in 1:length(d1_red)
+        cumulative[i+1] = cumulative[i] + long_pol[i]*long_dist[i]
+    end
+
+    temp=zeros(length(d1_red),1)
+    for i in 1:length(d1_red)
+        temp[i]=(cumulative[i+1]+cumulative[i])*long_dist[i]
+    end
+    d1_gini[j] = 1-sum(temp)/cumulative[length(d1_red)+1]
+end
+
+plot_income_gini = plot(1:prim.J-1, d1_gini[1:70], legend=false, dpi=300, title = "Income Inequality")
+xaxis!("Age")
+yaxis!("Gini Coefficient")
+vline!([41], label= "Retirement", color="black", line=(:dot,2))
+savefig(plot_income_gini,"income_gini.png")
+
+
+###### Consumption
+cpol_j = zeros(prim.nz,prim.na,prim.J)
+mean_c_j = zeros(prim.J)
+for j in 1:prim.J 
+    cpol_j[:,:,j] = (1+r_g)*ones(prim.nz,1).*a_grid' - Kg[:,:,j] + (1-θ)*hh_prod[:,j]*Wage*ones(1,prim.na) .+ T_g .+ b[j]
+    mean_c_j[j] = sum(dist_fin[:,:,j].*cpol_j[:,:,j])
+    #bpol_j[:,:,j] = 
+end
+
+gini_cons_j = zeros(prim.J)
+
+for j in 1:prim.J
+    gini_cons_j[j] = Gini_2(cpol_j, dist_fin, j)
+end
+
+cons_plot = plot(1:prim.J-1, mean_c_j[1:70], dpi=300, title="Average Consumption")
+xaxis!("Age")
+yaxis!("Average Coefficient")
+vline!([41], label= "Retirement", color="black", line=(:dot,2))
+savefig(cons_plot, "cons_plot.png")
+
+cons_gini = plot(1:prim.J, gini_cons_j, dpi=300, title="Consumption Inequality")
+xaxis!("Age")
+yaxis!("Gini Coefficient")
+vline!([41], label= "Retirement", color="black", line=(:dot,2))
+savefig(cons_gini,"cons_gini.png")
