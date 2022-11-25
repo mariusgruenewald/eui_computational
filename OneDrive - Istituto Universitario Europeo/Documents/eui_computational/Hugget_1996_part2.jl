@@ -416,7 +416,10 @@ xaxis!("Capital Grid")
 yaxis!("Density at age 20")
 savefig(dist_graph_20,"dist_20.png")
 
-plot(a_grid, dist_fin[:,:,60]', label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300, title = "Distribution at Age 60")
+dist_graph_60 = plot(a_grid, dist_fin[:,:,60]', label = [L"z_1" L"z_2" L"z_3" L"z_4" L"z_5"], dpi=300, title = "Distribution at Age 60")
+xaxis!("Capital Grid")
+yaxis!("Density at age 60")
+savefig(dist_graph_60,"dist_60.png")
 
 # Getting the Histogram of capital
 hist = zeros(prim.na)
@@ -644,13 +647,13 @@ for j in 1:prim.J
     gini_cons_j[j] = Gini_2(cpol_j, dist_fin, j)
 end
 
-cons_plot = plot(1:prim.J-1, mean_c_j[1:70], dpi=300, title="Average Consumption")
+cons_plot = plot(1:prim.J-1, mean_c_j[1:70], dpi=300, title="Average Consumption", legend =false)
 xaxis!("Age")
 yaxis!("Average Coefficient")
 vline!([41], label= "Retirement", color="black", line=(:dot,2))
 savefig(cons_plot, "cons_plot.png")
 
-cons_gini = plot(1:prim.J, gini_cons_j, dpi=300, title="Consumption Inequality")
+cons_gini = plot(1:prim.J, gini_cons_j, dpi=300, title="Consumption Inequality", legend=false)
 xaxis!("Age")
 yaxis!("Gini Coefficient")
 vline!([41], label= "Retirement", color="black", line=(:dot,2))
