@@ -54,7 +54,7 @@ function agg_labour(prim::Primitives)
     return Phi_sd, L_Agg[1]
 end
 
-function firm_decision(prim::Primitives, Agg_L::Float64, r::Vector{Float64}, A_path::Vector{Float64})
+function firm_decision(prim::Primitives, Agg_L::Float64, r, A_path)
     
     @unpack α, δ, β = prim
 
@@ -152,7 +152,7 @@ end
 
 # Call this function for transition
 function young_2010_transition(prim::Primitives, kpol::Matrix{Float64}, dist::Matrix{Float64})
-
+ 
     # Needs to be run for every period
     @unpack nz, na, trans_mat, a_grid_lin = prim
     a_grid = copy(a_grid_lin)
@@ -182,13 +182,13 @@ function young_2010_transition(prim::Primitives, kpol::Matrix{Float64}, dist::Ma
     end 
 
     # Compute distributional matrix. Here, we do not find invariant distribution but just iteration one period further
-    Γ = zeros(nz*na, nz*na)
+    Γ = zeros(nz, na)
     for z in 1:nz
         for i in 1:na
             # Based on matrix today, where will the lower index be tomorrow
-            Γ[:, ind_low[z,i]] = Γ[:, ind_low[z,i]] + dist[i,j]*wbelow[z,i]*trans_mat[z,:]'
+            Γ[:, Int.(ind_low[z,i])] = Γ[:, Int.(ind_low[z,i])] .+ dist[z,i]*wbelow[z,i]*trans_mat[z,:]
             # Based on matrix today, where will the upper index be tomorrow
-            Γ[:, ind_up[z,i]] = Γ[:,ind_up[z,i]] + dist[i,j]*wabove[z,i]*trans_mat[z,:]'
+            Γ[:, Int.(ind_up[z,i])] = Γ[:, Int.(ind_up[z,i])] .+ dist[z,i]*wabove[z,i]*trans_mat[z,:]
         end
     end
 
@@ -277,17 +277,14 @@ function solve_general_model(r::Float64, A::Float64)
         r = 0.95*r + 0.05*r_1
     end
 
-    return dist_egm, kpol, cons_levels, agg_k_hh, r
+    return dist_egm, kpol, cons_levels, agg_k_hh, r, wage
 end
 
-dist_init, kpol_init, cons_init, agg_k_init, r_init = solve_general_model(0.03, 1.0)
-dist_final, kpol_final, cons_final, agg_k_final, r_final = solve_general_model(0.03, 0.9)
+dist_init, kpol_init, cons_init, agg_k_init, r_init, wage_init = solve_general_model(0.03, 1.0)
+dist_final, kpol_final, cons_final, agg_k_final, r_final, wage_final = solve_general_model(0.03, 0.9)
 
-
-
-
-function transition(prim::Primitives, r_init::Float64, r_final::Float64, transition_periods::Float64, dist_init::Matrix{Float64}, 
-    cons_final::Matrix{Float64}, kpol_final::Matrix{Float64}, A_init, A_final)
+function transition(prim::Primitives, r_init::Float64, r_final::Float64, transition_periods::Int64, dist_init::Matrix{Float64}, 
+    cons_final::Matrix{Float64}, kpol_final::Matrix{Float64}, A_init::Float64, A_final::Float64, shock_perm::Bool)
 
     @unpack nz, na, a_grid_lin, α, δ = prim
 
@@ -299,15 +296,16 @@ function transition(prim::Primitives, r_init::Float64, r_final::Float64, transit
         A_path[2] = A_final*A_path[2]
     end
 
-    maxiter = 250
+    maxiter = 500
     a_grid = copy(a_grid_lin)
     # Set up container
-    r = collect(LinRange(r_init, r_final, Int.(transition_periods))) # intial guess of path 
+    r = collect(LinRange(r_init, r_final, transition_periods)) # intial guess of path 
     dist_trans = zeros(nz, na, transition_periods)
     cpol_trans = zeros(nz, na, transition_periods)
     kpol_trans = zeros(nz, na, transition_periods)
     agg_k_hh_trans = zeros(transition_periods)
     agg_c_trans = zeros(transition_periods)
+    wage = zeros(transition_periods)
 
     # Initialize results from the beginning (forward shooting)
     dist_trans[:,:,1] = dist_init
@@ -319,7 +317,10 @@ function transition(prim::Primitives, r_init::Float64, r_final::Float64, transit
 
     _, Agg_L = agg_labour(prim)
 
-    for iter in 1:maxiter
+    iter = 0
+    error = 1
+    tol = 1e-4
+    while error > tol && iter < maxiter
 
         # intiate wage for EGM
         _, wage = firm_decision(prim, Agg_L, r, A_path)
@@ -336,11 +337,64 @@ function transition(prim::Primitives, r_init::Float64, r_final::Float64, transit
         agg_c_trans[1] = sum(dist_trans[:,:,1].*cpol_trans[:,:,1])
         # shoot forward
         for t in 1:transition_periods-1
-            young_2010_transition(prim, kpol::Matrix{Float64})
+            dist_trans[:,:,t+1] = young_2010_transition(prim, kpol_trans[:,:,t], dist_trans[:,:,t])
+            agg_k_hh_trans[t+1] = sum(dist_trans[:,:,t] .* kpol_trans[:,:,t])
+            agg_c_trans[t+1] = sum(dist_trans[:,:,t+1] .* cpol_trans[:,:,t+1])
         end
-    return 
+
+        r_new = A_path .* α .* agg_k_hh_trans.^(α-1) * Agg_L^(1-α) .-δ
+        error = maximum(abs.(r - r_new))
+        println("error = ", round.(error; digits=6)," at iteration ", iter)
+        r = 0.95 .*r .+ 0.05.*r_new
+        iter = iter + 1
+    end
+
+    return r, wage, dist_trans, agg_k_hh_trans, agg_c_trans, kpol_trans, cpol_trans
 end
-A_init = 1.0
-A_final = 0.9
-prim = Primitives()
-transition_periods = 100
+
+r_perm, wage_perm, dist_trans_perm, agg_k_trans_perm, agg_c_trans_perm, kpol_perm, cpol_perm = transition(prim, r_init, r_final, 100, collect(dist_init), cons_final, kpol_final, 1.0, 0.9, true)
+
+perm_trans_r = plot(1:100, r_perm, legend=false, dpi=300, title = "Transition Path to Permanent Shock - Interest Rate")
+xaxis!("Time")
+yaxis!("Interest Rate")
+savefig(perm_trans_r,"perm_trans_r.png")
+
+perm_trans_w = plot(1:100, wage_perm, legend=false, dpi=300, title = "Transition Path to Permanent Shock - Wage")
+xaxis!("Time")
+yaxis!("Wage")
+savefig(perm_trans_w,"perm_trans_w.png")
+
+perm_trans_cap = plot(1:100, agg_k_trans_perm, legend=false, dpi=300, title = "Transition Path to Permanent Shock - Agg. Capital")
+xaxis!("Time")
+yaxis!("Aggregate Capital Supply")
+savefig(perm_trans_cap,"perm_trans_cap.png")
+
+perm_trans_cons = plot(1:100, agg_c_trans_perm, legend=false,dpi=300, title = "Transition Path to Permanent Shock - Consumption")
+xaxis!("Time")
+yaxis!("Aggregate Consumption")
+savefig(perm_trans_cons,"perm_trans_cons.png")
+
+
+##### Temporary Shock
+
+r_temp, wage_temp, dist_trans_temp, agg_k_trans_temp, agg_c_trans_temp, kpol_temp, cpol_temp = transition(prim, r_init, r_final, 100, collect(dist_init), cons_final, kpol_final, 1.0, 0.9, false)
+
+temp_trans_r = plot(1:100, r_temp, legend=false, dpi=300, title = "Transition Path to Temporary Shock - Interest Rate")
+xaxis!("Time")
+yaxis!("Interest Rate")
+savefig(temp_trans_r,"temp_trans_r.png")
+
+temp_trans_w = plot(1:100, wage_temp, legend=false, dpi=300, title = "Transition Path to Temporary Shock - Wage")
+xaxis!("Time")
+yaxis!("Wage")
+savefig(temp_trans_w,"temp_trans_w.png")
+
+temp_trans_cap = plot(1:100, agg_k_trans_temp, legend=false, dpi=300, title = "Transition Path to Temporary Shock - Agg. Capital")
+xaxis!("Time")
+yaxis!("Aggregate Capital Supply")
+savefig(temp_trans_cap,"temp_trans_cap.png")
+
+temp_trans_cons = plot(1:100, agg_c_trans_temp, legend=false,dpi=300, title = "Transition Path to Temporary Shock - Consumption")
+xaxis!("Time")
+yaxis!("Aggregate Consumption")
+savefig(temp_trans_cons,"temp_trans_cons.png")

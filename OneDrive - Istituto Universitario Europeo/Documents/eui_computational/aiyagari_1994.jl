@@ -395,7 +395,7 @@ function solve_general_model(VFI_bool::Bool, r::Float64)
 
     count = 0
     error = 1
-    tol_vfi = 0.001
+    tol_vfi = 1e-5
     tol_egm = 1e-5
     maxiter = 100
     prim = Primitive()
@@ -436,7 +436,7 @@ function solve_general_model(VFI_bool::Bool, r::Float64)
             println("error = ", round.(error; digits=6)," at iteration ", count," with r_1 = ", round.(r_1; digits=4)," and r = ",round.(r; digits=4))
             println("Aggregate Capital Supply = ", round(agg_k_hh; digits=4), " with aggregate Capital Demand = ", round(k_firm; digits=4))          
             
-            r = 0.95*r + 0.05*r_1
+            r = 0.9*r + 0.1*r_1
 
         end
 
