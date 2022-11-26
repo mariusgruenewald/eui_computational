@@ -1,5 +1,5 @@
 # This is a replication attempt at the Aiyagari Model with VFI and EGM
-# Problem Set 1, Life Cycle Course
+# Problem Set 1, Computational Methods
 # By Marius Gruenewald
 
 #----------------#
@@ -33,7 +33,7 @@ Random.seed!(1234)
 @with_kw struct Primitive
     
     minval::Float64 = 0.0
-    maxval::Float64 = 200.0
+    maxval::Float64 = 50.0
     na::Int64 = 200
     Z::Float64 = 1.0
     β::Float64 = 0.96
@@ -42,9 +42,10 @@ Random.seed!(1234)
     δ::Float64 = 0.05
     nz::Int64 = 2
     z_grid::Vector{Float64} = [0.1, 1.0]
-    trans_mat::Matrix{Float64} = [0.1 0.9; 0.1 0.9]
+    trans_mat::Matrix{Float64} = [0.1 0.9; 0.9 0.1]
     A::Float64 = 1.0
-    a_grid::Vector{Float64} = collect(range(minval, maxval, length=na))
+    a_grid_lin::Vector{Float64} = collect(range(minval, maxval, na))
+    a_grid_log::Vector{Float64} = exp.(LinRange(log(minval+1),log(maxval+1),na)).-1
 end
 
 function agg_labour(prim::Primitive)
@@ -62,15 +63,17 @@ function agg_labour(prim::Primitive)
 
     L_Agg = Phi_sd*z_grid
 
-    return Phi_sd, L_Agg
+    # multiply productivity with labour share 
+
+    return Phi_sd, L_Agg[1]
 end
 
-function firm_decision(prim::Primitive, L::Vector{Float64}, r::Float64)
+function firm_decision(prim::Primitive, Agg_L::Float64, r::Float64)
     
     @unpack α, A, δ, β = prim
 
-    k_firm = (α*(1+r)*A / (1-(1+r)+δ*(1+r)))^(1/(1-α))*L
-    wage = (1-α)*A^(1/(1-α)) * (α*(1+r)/(1-(1+r)+δ*(1+r)))^(α/(1-α))
+    k_firm =  ( (r + δ)/((α*A)*(Agg_L)^(1-α)) )^(1/(α-1))
+    wage = (1-α)*A*(k_firm)^(α)* (Agg_L)^(-α)
     
    return k_firm, wage
 end
@@ -87,10 +90,9 @@ function asset_grid(prim::Primitive, wage::Float64, r::Float64, b::Int64=0, a_ma
     return a_grid
 end
 
-# Consumption function
+function fcons(prim::Primitive, wage::Float64, a::Float64, r::Float64)
 
-function fcons(prim::Primitive, wage::Float64, a::Float64, r::Float64, a_grid::Vector{Float64})
-
+    a_grid = copy(prim.a_grid_lin)
     a_grid_dim = repeat(a_grid, 1, prim.nz)
     return wage*prim.z_grid .+ (1+r)*a .- a_grid_dim'
 end
@@ -103,8 +105,9 @@ end
 
 function VFI(prim::Primitive, wage::Float64, r::Float64)
     
-    @unpack trans_mat, β, σ, na, nz, z_grid, a_grid = prim
+    @unpack trans_mat, β, σ, na, nz, z_grid, a_grid_lin = prim
 
+    a_grid = copy(a_grid_lin)
     v_now = zeros(nz, na)
     v_next = zeros(nz, na)
     policy = zeros(nz, na)
@@ -117,9 +120,9 @@ function VFI(prim::Primitive, wage::Float64, r::Float64)
         
         for a in 1:na
             
-            c = fcons(prim, wage, a_grid[a], r, a_grid) # calculate consumption
+            c = fcons(prim, wage, a_grid[a], r) # calculate consumption
             util = util_(prim, c) # calculate util
-            util[findall(x-> x<=0, c)] .= -1000000 # replace unreasonable combinations
+            util[findall(x-> x<=0, c)] .= -1e8 # replace unreasonable combinations
             
             v_temp = util + β.* trans_mat * v_next # value function
             v_now[:,a] = maximum(v_temp, dims=2) # find max
@@ -140,7 +143,9 @@ end
 
 function EGM(prim::Primitive, wage::Float64, r::Float64)
 
-    @unpack nz, na, β, σ, z_grid, trans_mat, a_grid  = prim
+    @unpack nz, na, β, σ, z_grid, trans_mat, a_grid_lin  = prim
+
+    a_grid = copy(a_grid_lin)
     kpol_egm = zeros(nz,na)
     cpol = ones(nz,na)
     tol_pol = 0.00001
@@ -148,11 +153,11 @@ function EGM(prim::Primitive, wage::Float64, r::Float64)
     #cpol = (z_grid'*wage .+ r*a_grid)
     while err > tol_pol
 
-        Ec = trans_mat * (cpol).^(-σ)
+        Ec = trans_mat * cpol.^(-σ)
         
         c_impl = ((1+r)*β*Ec).^(-1/σ)
         
-        k_impl =  (c_impl + ones(nz,1).*a_grid' - z_grid*wage*ones(1,na))./(1+r)
+        k_impl =  (c_impl + ones(nz,1)*a_grid' - z_grid*wage*ones(1,na))./(1+r)
                     
         for (z,_) in enumerate(z_grid)
             nodes = (vec(k_impl[z,:]),) # Define the nodes
@@ -175,25 +180,25 @@ function EGM(prim::Primitive, wage::Float64, r::Float64)
     return kpol_egm, cpol
 end
 
-
-function calc_EEE(prim::Primitive, na_precise::Int64, Kg::Matrix{Float64}, r_g::Float64, Wage::Float64)
+# not working as of now
+function calc_EEE(prim::Primitive, na_precise::Int64, kpol::Matrix{Float64}, r::Float64, wage::Float64)
     
-    @unpack minval, maxval, nz, na, β, σ, trans_mat, a_grid, z_grid = prim
-    
+    @unpack minval, maxval, nz, na, β, σ, trans_mat, z_grid, a_grid_lin = prim
     # make fine grid
+    a_grid = copy(a_grid_lin)
     f_grid = zeros(na_precise)
     f_grid = collect(range(minval, maxval, length=na_precise))
 
     # interpolate g_pol at nkk_precise points 
-    EE_error  = zeros(nz,na_precise)
+    EE_error  = zeros(nz, na_precise)
+    g_prec = zeros(nz, na_precise)
+    c = zeros(nz, na_precise)
+    Ec_p = zeros(nz, na_precise)
 
-
-    g_prec = zeros(nz,na_precise)
     for z = 1:nz
 
-        # interpolate on fine grid
         nodes   = (a_grid,)
-        itp     = interpolate(nodes, Kg[z,:], Gridded(Linear()))
+        itp     = interpolate(nodes, kpol[z,:], Gridded(Linear()))
         extrp  = extrapolate(itp,Line())
         g_prec[z,:] = extrp(f_grid)
 
@@ -201,28 +206,30 @@ function calc_EEE(prim::Primitive, na_precise::Int64, Kg::Matrix{Float64}, r_g::
         for z_p = 1:nz
             # interpolate the future decision
             nodes_g  = (a_grid,)
-            itp_g    = interpolate(nodes_g, Kg[z_p,:], Gridded(Linear()))
+            itp_g    = interpolate(nodes_g, kpol[z_p,:], Gridded(Linear()))
             extrp_g  = extrapolate(itp_g,Line())
             g_p_prec[z_p,:]=extrp_g(g_prec[z,:])
         end
 
         for a = 1:na_precise
             # consumption today
-            c  = (f_grid[a]*(1+r_g) + z*Wage - g_prec[z,a]).^(-σ)
+            c[z,a]  = f_grid[a]*(1+r) + z*wage - g_prec[z,a]
             #consumption tomorrow
-            Ec_p = β*(1+r_g)*trans_mat[z,:]'*((g_prec[z,a]*(1+r_g)*ones(nz) + z_grid*Wage - g_p_prec[:,a]).^(-σ))
+            Ec_p[z,a] = β*(1+r)*trans_mat[z,:]'*(g_prec[z,a]*(1+r)*ones(nz) + z_grid*wage - g_p_prec[:,a])
             # use formula to calc realtive EEE in terms of consumption 
-            EE_error[z,a] = log(abs( c/Ec_p -1))
+            EE_error[z,a] = log(abs((c[z,a]/Ec_p[z,a]).^(-σ) - 1))
         end
+
     end
     
     return EE_error, f_grid
 end
 
-function young_2010(prim::Primitive, kpol::Array{Float64, 3})
+function young_2010_continuous(prim::Primitive, kpol::Matrix{Float64})
 
-    @unpack nz, na, trans_mat, a_grid = prim
+    @unpack nz, na, trans_mat, a_grid_lin = prim
 
+    a_grid = copy(a_grid_lin)
     ind_low = ones(nz,na)
     for a in 2:na
         for z in 1:nz
@@ -246,8 +253,6 @@ function young_2010(prim::Primitive, kpol::Array{Float64, 3})
     end 
 
     Γ = zeros(nz*na, nz*na)
-
-
     for z in 1:nz
         for i in 1:na
             Γ[Int.((i-1)*nz+z), Int.((ind_low[z,i]-1)*nz+1:ind_low[z,i]*nz)] = wbelow[z,i]*trans_mat[z,:]
@@ -255,124 +260,240 @@ function young_2010(prim::Primitive, kpol::Array{Float64, 3})
         end
     end
 
-    probst = (1/(nz*na))*ones(1,nz*na)
-    err = 1                      
-    while err > 1e-5      
+    probst = (1/(nz*na))*ones(nz*na)'
+    err = 1 
+    while err > 1e-6  
        probst1 = probst*Γ          
        err = maximum(abs.(probst1-probst))
-       probst = probst1
+       probst = copy(probst1)
     end
-
-
     dist_fin = reshape(probst, (nz, na))
 
     return dist_fin
 end
 
-function bisection(prim::Primitive, VFI::Bool)
-    
-    @unpack α = prim
+function young_2010_discrete(prim::Primitive, policy_a::Matrix{Float64})
 
-    while (err > 1e-5) && (iter<100)
-    
-        # Guess
-        q_now = (q_min + q_max)/2
-        
-        # Value function iteration
-        k_now, wages_2 = firm_decision(alpha, A, delta, q_now, L_agg)
+    @unpack nz, na, trans_mat = prim
 
-        if VFI == 1    
-            a_now, policy_a_2, pol_a_2, statio_2, v0_2, a_grid_2 = VFI(wages_2, q_now, s, sigma, Phi, beta, 100)
-        else
-            kpol, cpol = EGM(wages_2, q_now, s, sigma, Phi, beta, 100)
+    Γ = zeros(nz*na, nz*na)
+
+    for z in 1:nz
+        for i in 1:na
+            Γ[((i-1)*nz+z), Int.((policy_a[z,i]-1)*nz + 1:policy_a[z,i]*nz)] = trans_mat[z,:]
         end
-
-        q[1,iter] = q_now
-        
-        # Store temp. demand and supply
-        K_agg_2[iter] = k_now
-        a_mean_2[iter] = a_now
-        
-        # Idea: 
-        # Solving FOC of firm w.r.t q where q = 1/(1+r) => condition that has to hold 
-        q_2 = 1/(alpha*A*max(0.000001, a_now)^(alpha-1)-delta+1)
-        q[2,iter] = q_2
-        
-        # error
-        err = abs(q_2-q_now)
-        # Supply > Demand
-        if k_now > a_now
-            q_max = copy(q_now)
-        # Demand > Supply
-        else
-            q_min = copy(q_now)
-        end
-        iter = iter +1 
     end
-    
-    return
+
+    probst = (1/(nz*na))*ones(1,nz*na)
+    err = 1                      
+    while err > 1e-10
+       probst1 = probst*Γ          
+       err = maximum(abs.(probst1-probst))
+       probst = probst1
+    end
+    dist_fin = reshape(probst, (nz, na))
+
+    return dist_fin
 end
 
+function agg_capital_hh(prim::Primitive, dist_fin::Matrix{Float64}, Kg::Matrix{Float64}, Agg_L::Float64)
+    
+    @unpack A, α = prim
+
+    agg_temp = sum(dist_fin.*Kg)
+
+    Y = A*(sum(agg_temp))^(α) * (Agg_L)^(1 - α)
+
+    return agg_temp
+end
 
 function solve_partial_model(VFI_bool::Bool)
 
     prim = Primitive()
-    Phi_sd, L_Agg = agg_labour(prim)
+    #Phi_sd, L_Agg = agg_labour(prim)
 
     r = 0.03
-    k_firm, wage = firm_decision(prim, L_Agg, r)
+    #k_firm, wage = firm_decision(prim, L_Agg, r)
+    wage = 1.3
+
+    if r <= 0
+        blim = 0
+    else
+        blim = maximum([0, -(wage*prim.z_grid[1])/r])
+        if blim == 0
+            println("No natural borrowing constraint binds, only ad hoc of 0")
+        else
+            println("Natural borrowing constraint binds => Check bounds of capital grid")
+        end
+    end
 
     #a_grid = asset_grid(prim, wage, r)
     if VFI_bool == true
+        # Value Function Limbo
         policy_a, v_now = VFI(prim, wage, r)
-        cons_levels = prim.z_grid*wage .+ (1+r)*policy_a .- prim.a_grid'
+        # Consumption Levels
+        cons_levels = prim.z_grid*wage .+ (1+r)*policy_a .- prim.a_grid_lin'
+        ## Euler Equation Error
         EE_error_vfi, f_grid_vfi = calc_EEE(prim, 10000, policy_a, r, wage)
         return policy_a, v_now, cons_levels, EE_error_vfi, f_grid_vfi
+
     else
+        # Endogenous Grid Method
         kpol, cpol = EGM(prim, wage, r)
+        ## Euler Equation Error
         EE_error_egm, f_grid_egm = calc_EEE(prim, 10000, kpol, r, wage)
         return kpol, cpol, EE_error_egm, f_grid_egm 
+
     end
 end
 
-#### Value Function Iteration
-policy_a, v_now, cons_levels, EE_error_vfi, f_grid_vfi = solve_model(true)
-
-
-## Euler Equation Error
+#### Value Function Iteration - Something is off here, but what?
+policy_a, v_now, cons_levels, EE_error_vfi, f_grid_vfi = solve_partial_model(true)
 
 
 gr()
 prim = Primitive()
-value_vfi = plot(prim.a_grid, [v_now[1,:], v_now[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Value Functions")
+value_vfi = plot(prim.a_grid_lin, [v_now[1,:], v_now[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Value Functions")
 xaxis!(L"a")
 yaxis!("Value Function")
 savefig(value_vfi,"value_vfi.png")
 
-cons_vfi = plot(prim.a_grid, [cons_levels[1,:], cons_levels[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Consumption Functions")
+cons_vfi = plot(prim.a_grid_lin, [cons_levels[1,:], cons_levels[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Consumption Functions")
 xaxis!(L"a")
 yaxis!("Consumption Function")
 savefig(cons_vfi,"cons_vfi.png")
 
-pol_vfi = plot(prim.a_grid, [policy_a[1,:], policy_a[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Policy Functions")
+pol_vfi = plot(prim.a_grid_lin, [policy_a[1,:], policy_a[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Policy Functions")
 xaxis!(L"a")
 yaxis!("Policy Function")
 savefig(pol_vfi,"pol_vfi.png")
 
+eee_vfi = plot(f_grid_vfi, [EE_error_vfi[1,:], EE_error_vfi[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Euler Equation Error")
+xaxis!("Fine assets grid")
+yaxis!("Euler Equation error")
+savefig(eee_vfi,"eee_vfi.png")
 
 #### Endogenous Grid Method
-kpol, cpol, EE_error_egm, f_grid_egm  = solve_model(0.0)
+kpol, cpol, EE_error_egm, f_grid_egm  = solve_partial_model(false)
 
-cons_egm = plot(prim.a_grid, [cpol[1,:], cpol[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Consumption Functions")
+cons_egm = plot(prim.a_grid_lin, [cpol[1,:], cpol[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Consumption Functions")
 xaxis!(L"a")
 yaxis!("Consumption Function")
 savefig(cons_egm,"cons_egm.png")
 
-pol_egm = plot(prim.a_grid, [kpol[1,:], kpol[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Policy Functions")
+pol_egm = plot(prim.a_grid_lin, [kpol[1,:], kpol[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Policy Functions")
 xaxis!(L"a")
 yaxis!("Policy Function")
 savefig(pol_egm,"pol_egm.png")
 
+eee_egm = plot(f_grid_egm, [EE_error_egm[1,:], EE_error_egm[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Euler Equation Error")
+xaxis!("Fine assets grid")
+yaxis!("Euler Equation error")
+savefig(eee_egm,"eee_egm.png")
+
+function solve_general_model(VFI_bool::Bool, r::Float64)
+
+    count = 0
+    error = 1
+    tol_vfi = 0.001
+    tol_egm = 1e-5
+    maxiter = 100
+    prim = Primitive()
+    agg_k_hh = 0
+    Agg_K_hh = 0
+    wage_egm = 0
+    wage = 0
+    agg_k_hh_egm = 0
+    dist_egm = 0
+    dist_vfi = 0
+    k_firm_egm = 0
+
+    #minrate     = prim.δ
+    #maxrate     = (1-prim.β)/(prim.β)
+    
+    _, L_Agg = agg_labour(prim)
+
+    if VFI_bool == true
+
+        while error > tol_vfi && count < maxiter
+
+            count = count + 1
+            # Capital Demand & Wage
+            k_firm, wage = firm_decision(prim, L_Agg, r)
+            # Value Function Limbo
+            policy_a, v_now = VFI(prim, wage, r)
+            # Consumption Levels
+            cons_levels = prim.z_grid*wage .+ (1+r)*policy_a .- prim.a_grid_lin'
+            ## Euler Equation Error
+            dist_vfi = young_2010_discrete(prim, policy_a)
+            # Capital Supply and Output
+            Agg_K_hh = sum(dist_vfi.*policy_a)
+            agg_k_hh = copy(Agg_K_hh)
+
+            # Back out interest rate 
+            r_1 = prim.α*prim.A*(agg_k_hh^(prim.α-1))*(L_Agg^(1-prim.α)) - prim.δ
+            error = abs(r_1-r)
+            println("error = ", round.(error; digits=6)," at iteration ", count," with r_1 = ", round.(r_1; digits=4)," and r = ",round.(r; digits=4))
+            println("Aggregate Capital Supply = ", round(agg_k_hh; digits=4), " with aggregate Capital Demand = ", round(k_firm; digits=4))          
+            
+            r = 0.95*r + 0.05*r_1
+
+        end
+
+        return dist_vfi, policy_a, agg_k_hh, r, wage
+
+    else
+
+        while error > tol_egm && count < maxiter
+
+            count = count + 1
+            
+            # Capital Demand & Wage
+            k_firm_egm, wage_egm = firm_decision(prim, L_Agg, r)
+            # Endogenous Grid Method
+            kpol, cpol = EGM(prim, wage_egm, r)
+            ## Euler Equation Error
+            dist_egm = young_2010_continuous(prim, kpol)
+
+            # Capital Supply and Output
+            Agg_K_hh_egm = sum(dist_egm.*kpol)
+            agg_k_hh_egm = copy(Agg_K_hh_egm)
+
+            # Back out interest rate 
+            r_egm_1 = prim.α * prim.A*(agg_k_hh_egm^(prim.α-1))*(L_Agg^(1-prim.α)) - prim.δ
+
+            error = abs(r_egm_1-r)
+            println("error = ", round.(error; digits=6)," at iteration ", count," with r_egm_1 = ", round.(r_egm_1; digits=4)," and r = ",round.(r; digits=4))                 
+            println("Aggregate Capital Supply = ", round(agg_k_hh_egm; digits=4), " with aggregate Capital Demand = ", round(k_firm_egm; digits=4))          
+
+            r = 0.95*r + 0.05*r_egm_1
+        end
+
+        return dist_egm, kpol, agg_k_hh_egm, r, wage_egm
+        
+    end
+end
+#### Value Function Iteration, does not quite work
+dist_vfi, policy_a, agg_k_hh_vfi, r_vfi, wage_vfi  = solve_general_model(true, 0.3)
+dist_vfi_plot = plot(prim.a_grid_lin, dist_vfi', label = [L"z_1" L"z_2"], dpi=300, title = "Probability of Assets by Productivity VFI")
+xaxis!("Assets")
+yaxis!("Probability")
+savefig(dist_vfi_plot,"dist_vfi.png")
+
+ergodic_dist_vfi = plot(prim.a_grid_lin, dist_vfi'.*policy_a', label = [L"z_1" L"z_2"], dpi=300, title = "Distribution of Assets by Productivity VFI")
+xaxis!("Assets")
+yaxis!("Distribution")
+savefig(ergodic_dist_vfi,"ergodic_dist_vfi.png")
 
 
+# Seems to work for very cautious updates
+dist_egm, kpol, agg_k_hh_egm, r_egm, wage_egm  = solve_general_model(false, 0.3)
+dist_egm_plot = plot(prim.a_grid_lin, dist_egm', label = [L"z_1" L"z_2"], dpi=300, title = "Probability of Assets by Productivity EGM")
+xaxis!("Assets")
+yaxis!("Probability")
+savefig(dist_egm_plot,"dist_egm.png")
 
+ergodic_dist_egm = plot(prim.a_grid_lin, dist_egm'.*kpol', label = [L"z_1" L"z_2"], dpi=300, title = "Distribution of Assets by Productivity VFI")
+xaxis!("Assets")
+yaxis!("Distribution")
+savefig(ergodic_dist_egm,"ergodic_dist_egm.png")
