@@ -5,9 +5,6 @@
 
 using QuantEcon
 using BenchmarkTools
-using CSV
-using DataFrames
-using DelimitedFiles
 using Plots
 using Interpolations
 using Random
@@ -33,16 +30,17 @@ Random.seed!(1234)
     trans_mat::Matrix{Float64} = [0.1 0.9; 0.9 0.1]
     a_grid_lin::Vector{Float64} = collect(range(minval, maxval, na))
     a_grid_log::Vector{Float64} = exp.(LinRange(log(minval+1),log(maxval+1),na)).-1
+    tol::Float64 = 1e-5
+    maxiter::Int64 = 500
 
 end
 
 function agg_labour(prim::Primitives)
     
-    @unpack nz, trans_mat, z_grid = prim
+    @unpack nz, trans_mat, z_grid, tol = prim
 
     Phi_sd = ones(1,nz)/nz
     diff = 1
-    tol = 0.0000001;
     while abs(diff) > tol
         Phi_sd1 = Phi_sd*trans_mat
         diff = (Phi_sd1-Phi_sd)[argmax(Phi_sd1-Phi_sd)]
@@ -67,15 +65,15 @@ end
 # Call this function to compute steady state
 function EGM(prim::Primitives, wage::Float64, r::Float64)
 
-    @unpack nz, na, β, σ, z_grid, trans_mat, a_grid_lin  = prim
+    @unpack nz, na, β, σ, z_grid, trans_mat, a_grid_lin, tol = prim
     
     a_grid = copy(a_grid_lin)
     kpol_egm = zeros(nz,na)
     cpol = ones(nz,na)
-    tol_pol = 0.00001
+    
     err  = 1
-    #cpol = (z_grid'*wage .+ r*a_grid)
-    while err > tol_pol
+    
+    while err > tol
 
         Ec = trans_mat * cpol.^(-σ)
         
@@ -106,7 +104,8 @@ end
 
 # Call this function to compute steady state
 function young_2010_continuous(prim::Primitives, kpol::Matrix{Float64})
-    @unpack nz, na, trans_mat, a_grid_lin = prim
+
+    @unpack nz, na, trans_mat, a_grid_lin, tol = prim
     a_grid = copy(a_grid_lin)
     ind_low = ones(nz,na)
     for a in 2:na
@@ -140,7 +139,7 @@ function young_2010_continuous(prim::Primitives, kpol::Matrix{Float64})
 
     probst = (1/(nz*na))*ones(nz*na)'
     err = 1 
-    while err > 1e-6  
+    while err > 1e-10
        probst1 = probst*Γ          
        err = maximum(abs.(probst1-probst))
        probst = copy(probst1)
@@ -235,8 +234,6 @@ function solve_general_model(r::Float64, A::Float64)
 
     count = 0
     error = 1
-    tol_egm = 1e-5
-    maxiter = 100
     prim = Primitives()
     agg_k_hh = 0
     Agg_K_hh = 0
@@ -251,7 +248,7 @@ function solve_general_model(r::Float64, A::Float64)
 
     _, L_Agg = agg_labour(prim)
 
-    while error > tol_egm && count < maxiter
+    while error > prim.tol && count < prim.maxiter
 
         count = count + 1
         
@@ -280,13 +277,14 @@ function solve_general_model(r::Float64, A::Float64)
     return dist_egm, kpol, cons_levels, agg_k_hh, r, wage
 end
 
-dist_init, kpol_init, cons_init, agg_k_init, r_init, wage_init = solve_general_model(0.03, 1.0)
-dist_final, kpol_final, cons_final, agg_k_final, r_final, wage_final = solve_general_model(0.03, 0.9)
+@time dist_init, kpol_init, cons_init, agg_k_init, r_init, wage_init = solve_general_model(0.03, 1.0)
+@time dist_final, kpol_final, cons_final, agg_k_final, r_final, wage_final = solve_general_model(0.03, 0.9)
 
 function transition(prim::Primitives, r_init::Float64, r_final::Float64, transition_periods::Int64, dist_init::Matrix{Float64}, 
     cons_final::Matrix{Float64}, kpol_final::Matrix{Float64}, A_init::Float64, A_final::Float64, shock_perm::Bool)
 
-    @unpack nz, na, a_grid_lin, α, δ = prim
+    @unpack nz, na, a_grid_lin, α, δ, tol, maxiter = prim
+    a_grid = copy(a_grid_lin)
 
     if shock_perm == true
         A_path = A_init*ones(transition_periods)
@@ -296,8 +294,6 @@ function transition(prim::Primitives, r_init::Float64, r_final::Float64, transit
         A_path[2] = A_final*A_path[2]
     end
 
-    maxiter = 500
-    a_grid = copy(a_grid_lin)
     # Set up container
     r = collect(LinRange(r_init, r_final, transition_periods)) # intial guess of path 
     dist_trans = zeros(nz, na, transition_periods)
@@ -319,7 +315,7 @@ function transition(prim::Primitives, r_init::Float64, r_final::Float64, transit
 
     iter = 0
     error = 1
-    tol = 1e-4
+
     while error > tol && iter < maxiter
 
         # intiate wage for EGM
@@ -351,8 +347,8 @@ function transition(prim::Primitives, r_init::Float64, r_final::Float64, transit
 
     return r, wage, dist_trans, agg_k_hh_trans, agg_c_trans, kpol_trans, cpol_trans
 end
-
-r_perm, wage_perm, dist_trans_perm, agg_k_trans_perm, agg_c_trans_perm, kpol_perm, cpol_perm = transition(prim, r_init, r_final, 100, collect(dist_init), cons_final, kpol_final, 1.0, 0.9, true)
+prim = Primitives()
+@time r_perm, wage_perm, dist_trans_perm, agg_k_trans_perm, agg_c_trans_perm, kpol_perm, cpol_perm = transition(prim, r_init, r_final, 100, collect(dist_init), cons_final, kpol_final, 1.0, 0.9, true)
 
 perm_trans_r = plot(1:100, r_perm, legend=false, dpi=300, title = "Transition Path to Permanent Shock - Interest Rate")
 xaxis!("Time")
@@ -377,7 +373,7 @@ savefig(perm_trans_cons,"perm_trans_cons.png")
 
 ##### Temporary Shock
 
-r_temp, wage_temp, dist_trans_temp, agg_k_trans_temp, agg_c_trans_temp, kpol_temp, cpol_temp = transition(prim, r_init, r_final, 100, collect(dist_init), cons_final, kpol_final, 1.0, 0.9, false)
+@time r_temp, wage_temp, dist_trans_temp, agg_k_trans_temp, agg_c_trans_temp, kpol_temp, cpol_temp = transition(prim, r_init, r_final, 100, collect(dist_init), cons_final, kpol_final, 1.0, 0.9, false)
 
 temp_trans_r = plot(1:100, r_temp, legend=false, dpi=300, title = "Transition Path to Temporary Shock - Interest Rate")
 xaxis!("Time")

@@ -17,9 +17,6 @@
 # using Pckg
 using QuantEcon
 using BenchmarkTools
-using CSV
-using DataFrames
-using DelimitedFiles
 using Plots
 using Interpolations
 using Random
@@ -46,15 +43,16 @@ Random.seed!(1234)
     A::Float64 = 1.0
     a_grid_lin::Vector{Float64} = collect(range(minval, maxval, na))
     a_grid_log::Vector{Float64} = exp.(LinRange(log(minval+1),log(maxval+1),na)).-1
+    tol::Float64 = 1e-5
+    maxiter::Int64 = 500
 end
 
 function agg_labour(prim::Primitive)
     
-    @unpack nz, trans_mat, z_grid = prim
+    @unpack nz, trans_mat, z_grid, tol = prim
 
     Phi_sd = ones(1,nz)/nz
     diff = 1
-    tol = 0.0000001;
     while abs(diff) > tol
         Phi_sd1 = Phi_sd*trans_mat
         diff = (Phi_sd1-Phi_sd)[argmax(Phi_sd1-Phi_sd)]
@@ -78,18 +76,6 @@ function firm_decision(prim::Primitive, Agg_L::Float64, r::Float64)
    return k_firm, wage
 end
 
-# Generate a Assets Grid
-function asset_grid(prim::Primitive, wage::Float64, r::Float64, b::Int64=0, a_max::Int64 = 30)
-    
-    # Find minimum
-    a_min = -1*min(b, wage*0.25/(1-(1+r)))
-    
-    # Set up grid
-    a_grid = collect(LinRange(a_min, a_max, prim.na))
-    
-    return a_grid
-end
-
 function fcons(prim::Primitive, wage::Float64, a::Float64, r::Float64)
 
     a_grid = copy(prim.a_grid_lin)
@@ -105,14 +91,13 @@ end
 
 function VFI(prim::Primitive, wage::Float64, r::Float64)
     
-    @unpack trans_mat, β, σ, na, nz, z_grid, a_grid_lin = prim
+    @unpack trans_mat, β, σ, na, nz, z_grid, a_grid_lin, tol = prim
 
     a_grid = copy(a_grid_lin)
     v_now = zeros(nz, na)
     v_next = zeros(nz, na)
     policy = zeros(nz, na)
     error = 1
-    tol = 10e-6
     util = 0
     c = 0
     
@@ -143,15 +128,14 @@ end
 
 function EGM(prim::Primitive, wage::Float64, r::Float64)
 
-    @unpack nz, na, β, σ, z_grid, trans_mat, a_grid_lin  = prim
+    @unpack nz, na, β, σ, z_grid, trans_mat, a_grid_lin, tol  = prim
 
     a_grid = copy(a_grid_lin)
     kpol_egm = zeros(nz,na)
     cpol = ones(nz,na)
-    tol_pol = 0.00001
     err  = 1
     #cpol = (z_grid'*wage .+ r*a_grid)
-    while err > tol_pol
+    while err > tol
 
         Ec = trans_mat * cpol.^(-σ)
         
@@ -227,7 +211,7 @@ end
 
 function young_2010_continuous(prim::Primitive, kpol::Matrix{Float64})
 
-    @unpack nz, na, trans_mat, a_grid_lin = prim
+    @unpack nz, na, trans_mat, a_grid_lin, tol = prim
 
     a_grid = copy(a_grid_lin)
     ind_low = ones(nz,na)
@@ -262,7 +246,7 @@ function young_2010_continuous(prim::Primitive, kpol::Matrix{Float64})
 
     probst = (1/(nz*na))*ones(nz*na)'
     err = 1 
-    while err > 1e-6  
+    while err > 1e-10
        probst1 = probst*Γ          
        err = maximum(abs.(probst1-probst))
        probst = copy(probst1)
@@ -274,7 +258,7 @@ end
 
 function young_2010_discrete(prim::Primitive, policy_a::Matrix{Float64})
 
-    @unpack nz, na, trans_mat = prim
+    @unpack nz, na, trans_mat, tol = prim
 
     Γ = zeros(nz*na, nz*na)
 
@@ -313,7 +297,6 @@ function solve_partial_model(VFI_bool::Bool)
     #Phi_sd, L_Agg = agg_labour(prim)
 
     r = 0.03
-    #k_firm, wage = firm_decision(prim, L_Agg, r)
     wage = 1.3
 
     if r <= 0
@@ -348,7 +331,7 @@ function solve_partial_model(VFI_bool::Bool)
 end
 
 #### Value Function Iteration - Something is off here, but what?
-policy_a, v_now, cons_levels, EE_error_vfi, f_grid_vfi = solve_partial_model(true)
+@time policy_a, v_now, cons_levels, EE_error_vfi, f_grid_vfi = solve_partial_model(true)
 
 
 gr()
@@ -374,7 +357,7 @@ yaxis!("Euler Equation error")
 savefig(eee_vfi,"eee_vfi.png")
 
 #### Endogenous Grid Method
-kpol, cpol, EE_error_egm, f_grid_egm  = solve_partial_model(false)
+@time kpol, cpol, EE_error_egm, f_grid_egm  = solve_partial_model(false)
 
 cons_egm = plot(prim.a_grid_lin, [cpol[1,:], cpol[2,:]], label = [L"z_1" L"z_2"], dpi=300, title = "Consumption Functions")
 xaxis!(L"a")
@@ -395,9 +378,7 @@ function solve_general_model(VFI_bool::Bool, r::Float64)
 
     count = 0
     error = 1
-    tol_vfi = 1e-5
-    tol_egm = 1e-5
-    maxiter = 100
+
     prim = Primitive()
     agg_k_hh = 0
     Agg_K_hh = 0
@@ -415,7 +396,7 @@ function solve_general_model(VFI_bool::Bool, r::Float64)
 
     if VFI_bool == true
 
-        while error > tol_vfi && count < maxiter
+        while error > prim.tol && count < prim.maxiter
 
             count = count + 1
             # Capital Demand & Wage
@@ -444,7 +425,7 @@ function solve_general_model(VFI_bool::Bool, r::Float64)
 
     else
 
-        while error > tol_egm && count < maxiter
+        while error > prim.tol && count < prim.maxiter
 
             count = count + 1
             
@@ -474,7 +455,7 @@ function solve_general_model(VFI_bool::Bool, r::Float64)
     end
 end
 #### Value Function Iteration, does not quite work
-dist_vfi, policy_a, agg_k_hh_vfi, r_vfi, wage_vfi  = solve_general_model(true, 0.3)
+@time dist_vfi, policy_a, agg_k_hh_vfi, r_vfi, wage_vfi  = solve_general_model(true, 0.3)
 dist_vfi_plot = plot(prim.a_grid_lin, dist_vfi', label = [L"z_1" L"z_2"], dpi=300, title = "Probability of Assets by Productivity VFI")
 xaxis!("Assets")
 yaxis!("Probability")
@@ -487,7 +468,7 @@ savefig(ergodic_dist_vfi,"ergodic_dist_vfi.png")
 
 
 # Seems to work for very cautious updates
-dist_egm, kpol, agg_k_hh_egm, r_egm, wage_egm  = solve_general_model(false, 0.3)
+@time dist_egm, kpol, agg_k_hh_egm, r_egm, wage_egm  = solve_general_model(false, 0.3)
 dist_egm_plot = plot(prim.a_grid_lin, dist_egm', label = [L"z_1" L"z_2"], dpi=300, title = "Probability of Assets by Productivity EGM")
 xaxis!("Assets")
 yaxis!("Probability")
