@@ -30,7 +30,7 @@ using Optim
 @with_kw struct Parameter
 
     minval::Float64 = 0.0
-    maxval::Float64 = 50.0
+    maxval::Float64 = 30.0
     na::Int64 = 200
     Z::Float64 = 1.0
     β::Float64 = 0.96
@@ -40,7 +40,7 @@ using Optim
     A::Float64 = 1.0
     nz::Int64 = 2
     z_grid::Vector{Float64} = [0.1, 1.0]
-    trans_mat::Matrix{Float64} = [0.1 0.9; 0.9 0.1]
+    trans_mat::Matrix{Float64} = [0.9 0.1; 0.1 0.9]
     a_grid_lin::Vector{Float64} = collect(range(minval, maxval, na))
     a_grid_log::Vector{Float64} = exp.(LinRange(log(minval+1),log(maxval+1),na)).-1
     sim_periods::Int64 = 100
