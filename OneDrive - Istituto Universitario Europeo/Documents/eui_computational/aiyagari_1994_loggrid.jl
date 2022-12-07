@@ -83,7 +83,7 @@ function fcons(prim::Primitive, wage::Float64, a::Float64, r::Float64)
 end
 
 
-function util_(prim::Primitive, c::Matrix{Float64})
+function util_(prim::Primitive, c)
     @unpack σ = prim
     u = σ == 1 ? x -> log.(x) : x -> (x.^(1 - σ) .- 1) ./ (1 - σ)
     return u(c)
@@ -91,42 +91,59 @@ end
 
 
 function VFI(prim::Primitive, wage::Float64, r::Float64)
-    
-    @unpack trans_mat, β, σ, na, nz, z_grid, a_grid_log = prim
+ 
+    @unpack trans_mat, β, σ, na, nz, z_grid, a_grid_log, tol, maxiter = prim
 
     a_grid = copy(a_grid_log)
-    v_now = zeros(nz, na)
-    v_next = zeros(nz, na)
-    policy = zeros(nz, na)
+    v_now = zeros(na, nz)
+    V_new = zeros(na, nz)
     error = 1
-    util = 0
     c = 0
     iter =0
-    while error > prim.tol && iter < prim.maxiter
-        
-        for a in 1:na
+    V_temp = ones(na,nz,na) * -Inf # k,z,kp 
+
+    while error > tol && iter < maxiter
+
+        for (j,z) in enumerate(z_grid)
+
+            EV =  v_now*trans_mat[j,:] 
+
+            for (i,a) in enumerate(a_grid)
+
+                for (p_i, p_a) in enumerate(a_grid)
+                
             
-            c = fcons(prim, wage, a_grid[a], r) # calculate consumption
-            util = util_(prim, c) # calculate util
-            util[findall(x-> x<=0, c)] .= -1e8 # replace unreasonable combinations
-            
-            v_temp = util + β.* trans_mat * v_next # value function
-            v_now[:,a] = maximum(v_temp, dims=2) # find max
-            
-            for z in 1:nz
-                policy[z, a] = findmax(v_temp, dims=2)[2][z][2] # policy decision
+                    c = (1+r)*a  +  z*wage -  p_a # calculate consumption
+
+                    if c .<= 0.
+                        V_temp[i, j, p_i] = -Inf   
+                        break # if this kpi doesnt work any bigger wont work either (monotonicity)
+                    end
+
+                    V_temp[i, j, p_i] = util_(prim, c) .+ β * EV[p_i] 
+                end
+
             end
         
         end
-        error = maximum(abs.(v_now - v_next))
-        v_next = copy(v_now)
+
+        V_new = maximum(V_temp, dims= 3 )[:,:,1]  
+
+        error = maximum(abs.(v_now - V_new))
+        v_now = deepcopy(V_new)
         iter = iter +1
+        println(iter, error)
     end
+
+    kpi_idx = argmax(v_now, dims= 3 )[:,:,1]  
+    k_pol   = [ a_grid[kpi_idx[i,j][3]] for i = 1:na, j=1:nz]   
+    c_pol   = (1+r)*a_grid  .+  z_grid'*wage   .-  k_pol
+
     # set up capital-state x capita-state matrix that incorporates the prob of being in a certain capital-state point
     # tomorrow based on today's decision
-    return policy, v_now
+    return k_pol, v_now, c_pol
 end
-
+a_grid[kpi_idx[1,1][3]]
 
 function EGM(prim::Primitive, wage::Float64, r::Float64)
 
