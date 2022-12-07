@@ -239,7 +239,7 @@ function young_2010_transition(prim::Primitives, kpol::Matrix{Float64}, dist::Ma
 end
 
 
-function solve_general_model(n_sim)
+function krusell_smith(n_sim)
 
     count = 0
     error = 1
@@ -305,18 +305,18 @@ function solve_general_model(n_sim)
         error = maximum(abs.(β_vec - β_vec_model))
         println("Current Error:", error, " at iteration:", count)
 
-        β₀ₗ = deepcopy(β_0l)
-        β₁ₗ = deepcopy(β_1l)
-        β₀ₕ = deepcopy(β_0h)
-        β₁ₕ = deepcopy(β_1h)
+        β₀ₗ = 0.9*β₀ₗ + 0.1*β_0l
+        β₁ₗ = 0.9*β₁ₗ + 0.1*β_1l
+        β₀ₕ = 0.9*β₀ₕ + 0.1*β_0h
+        β₁ₕ = 0.9*β₁ₕ + 0.1*β_1h
         
     end
 
-    return dist, kpol, agg_k_hh, r, wage
+    return dist, KZ_mat, K_agg, r, Z_index, β_vec_model
 end
 
 
-
+dist, KZ_mat, K_agg, r, Z_index, β_vec_model = krusell_smith(10000)
 
 
 # We are interested in kpol and agg_k_hh
