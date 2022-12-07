@@ -15,6 +15,9 @@
 #import Pkg; Pkg.add("BenchmarkTools")
 #import Pkg; Pkg.add("StatsBase")
 #import Pkg; Pkg.add("TensorCore")
+#import Pkg; Pkg.add("GLM")
+#import Pkg; Pkg.add("DataFrames")
+
 # using Pckg
 
 using QuantEcon
@@ -27,6 +30,8 @@ using LaTeXStrings
 using Statistics
 using StatsBase
 using TensorCore
+using GLM
+using DataFrames
 
 Random.seed!(1234)
 
@@ -99,12 +104,12 @@ function Z_agg_dist(prim::Primitives)
 end
 
 # Rework and solve for 
-function firm_decision(prim::Primitives, Agg_L::Float64)
+function firm_decision(prim::Primitives, Agg_L::Float64, K_agg::Float64, Z_agg::Float64)
     
-    @unpack α, δ, β, Z_agg_grid, K_agg_grid = prim
+    @unpack α, δ, β = prim
 
-    r = α .* Z_agg_grid * K_agg_grid'.^(α-1).* (Agg_L)^(1-α) .- δ
-    wage = (1-α).* Z_agg_grid *(K_agg_grid').^(α) .* (Agg_L)^(-α)
+    r = α .* Z_agg * K_agg'.^(α-1).* (Agg_L)^(1-α) .- δ
+    wage = (1-α).* Z_agg *(K_agg').^(α) .* (Agg_L)^(-α)
     
    return r, wage
 end
@@ -114,76 +119,6 @@ function util_(prim::Primitives, c)
     @unpack σ = prim
     u = σ == 1 ? x -> log.(x) : x -> (x.^(1 - σ) .- 1) ./ (1 - σ)
     return u(c)
-end
-
-
-function young_2010_continuous(prim::Primitives, kpol)
-
-    @unpack nz, na, trans_mat, a_grid_log, tol, Z_agg_grid, K_agg_grid, n_agg = prim
-
-    a_grid = copy(a_grid_log)
-    ind_low = ones(length(Z_agg_grid), n_agg, nz, na)
-    for a in 2:na
-        for z in 1:nz
-            for Z in 1:length(Z_agg_grid)
-                for K in 1:n_agg
-                    ind_low[Z, K, z, findall(x -> x >= a_grid[a], kpol[Z, K, z,:])] .=  a
-                    ind_low[Z, K, z, findall(x -> x >= na, ind_low[Z,K,z,:])] .=  na-1
-                end
-            end
-        end
-    end
-    
-    ind_up = ind_low .+ 1
-
-    wabove = ones(length(Z_agg_grid), n_agg, nz, na)
-    wbelow = ones(length(Z_agg_grid), n_agg, nz, na)
-
-    for z in 1:nz
-        for i in 1:na
-            for Z in 1:length(Z_agg_grid)
-                for K in 1:n_agg
-                    wabove[Z,K,z,i] =  (kpol[Z,K,z,i] - a_grid[Int(ind_low[Z,K,z,i])]) / (a_grid[Int(ind_low[Z,K,z,i]) + 1] - a_grid[Int(ind_low[Z,K,z,i])])
-                    wabove[Z,K,z,i] = min(wabove[Z,K,z,i], 1)
-                    wabove[Z,K,z,i] = max(wabove[Z,K,z,i], 0)
-                    wbelow[Z,K,z,i] = 1-wabove[Z,K,z,i]
-                end
-            end
-        end
-    end 
-
-    Γ = zeros(length(Z_agg_grid), n_agg, nz*na, nz*na)
-    for z in 1:nz
-        for i in 1:na
-            for Z in 1:length(Z_agg_grid)
-                for K in 1:n_agg
-                    Γ[Z, K, Int.((i-1)*nz+z), Int.((ind_low[Z,K,z,i]-1)*nz+1 : ind_low[Z,K,z,i]*nz)] = wbelow[Z,K,z,i]*trans_mat[z,:]
-                    Γ[Z, K, Int.((i-1)*nz+z), Int.((ind_up[Z,K,z,i]-1)*nz+1 : ind_up[Z,K,z,i]*nz)] = wabove[Z,K,z,i]*trans_mat[z,:]
-                end
-            end
-        end
-    end
-
-    probst1 = zeros(length(Z_agg_grid), n_agg, nz*na)
-    err = 1
-
-    for Z in 1:length(Z_agg_grid)
-        for K in 1:n_agg
-
-            probst = (1/(nz*na)).* ones(nz*na)
-            err = 1
-
-            while err > 1e-10
-                probst1[Z,K,:] = Γ[Z,K,:,:] ⊡ probst
-                err = maximum(abs.(probst1[Z,K,:,:] - probst))
-                probst = copy(probst1[Z,K,:,:])
-            end
-        end
-    end
-
-    dist_fin = reshape(probst1, (length(Z_agg_grid), n_agg, nz, na))
-
-    return dist_fin
 end
 
 
@@ -199,59 +134,8 @@ function agg_capital_hh(prim::Primitives, dist_fin::Matrix{Float64}, Kg::Matrix{
 end
 
 
-function EGM(prim::Primitives, wage::Float64, r::Float64)
-
-    @unpack nz, na, β, σ, z_grid, trans_mat, a_grid_log, tol, n_agg, Z_agg_grid, Z_mat, K_agg_grid, maxiter = prim
-
-    a_grid = copy(a_grid_log)
-    kpol_egm = zeros(nz, na)
-    cpol = ones(nz, na)
-    err  = 1
-    count = 0
-
-    while err > tol && count < maxiter
-
-        count = count + 1
-
-        Ec = Z_mat ⊡ (trans_mat ⊡ cpol.^(-σ))
-        
-        c_impl = ((1 .+ r).*β.*Ec).^(-1/σ)
-        
-        k_impl =  (1 + r)^(-1) .* (c_impl .+ ones(nz, 1) ⊡ collect(a_grid') .- (z_grid ⊡ wage .* ones(1, na)))
-                    
-        # Interpolation: i only understand it with vectors => go to vector level (a_grid)
-        for (z,_) in enumerate(z_grid)
-
-            #for (K_idx,_) in enumerate(K_agg_grid)
-
-             #   for (Z_idx,_) in enumerate(Z_agg_grid)
-                    
-                    nodes = (vec(k_impl[z,:]),) # Define the nodes
-                    itp = interpolate(nodes, a_grid, Gridded(Linear())) # Perform Interpolations
-                    etpf = extrapolate(itp, Line()) # Set up environment for extrapolation
-                    kpol_egm[z,:] = etpf(a_grid) # Perform extrapolation
-
-               # end
-            #end
-        end
-
-        # Make sure boundaries are kept
-        kpol_egm[(kpol_egm .< 0)] .= 0
-        kpol_egm[(kpol_egm .> a_grid[na])] .= a_grid[na]
-
-        # Back out implied consumption and check for convergence
-        cpol1 = (1 .+ r) .* ones(nz, 1) ⊡ collect(a_grid') - kpol_egm + (z_grid ⊡ wage .* ones(1, na))
-        err = maximum(abs.(cpol-cpol1))
-        cpol = deepcopy(cpol1)
-
-
-        println("err = ", round.(err; digits=6)," at iteration ", count)
-    end
-
-    return kpol_egm, cpol
-end
-
-function EGM_transition(prim::Primitives, wage::Float64, r::Float64, r_next::Float64, cpol::Matrix{Float64})
+# Call this function for transition
+function EGM_transition(prim::Primitives, wage::Float64, r::Float64, cpol::Matrix{Float64})
 
     # Here, we do not find convergence. We just take the previous results and compute the responses.
     # This gives inputs for next period. We simulate the economy sequentionally.
@@ -260,7 +144,7 @@ function EGM_transition(prim::Primitives, wage::Float64, r::Float64, r_next::Flo
     
     a_grid = copy(a_grid_log)
 
-    c_impl = ((1+r) * β * Z_mat ⊡ (trans_mat ⊡ cpol.^(-σ))).^(-1/σ)
+    c_impl = ((1+r) * β * Z_mat ⊡ (trans_mat * cpol.^(-σ))).^(-1/σ)
     
     k_impl =  (c_impl + ones(nz,1)*a_grid' - z_grid*wage*ones(1,na))./(1+r)
     kpol_egm_trans = zeros(nz, na)
@@ -282,7 +166,6 @@ function EGM_transition(prim::Primitives, wage::Float64, r::Float64, r_next::Flo
 
     return kpol_egm_trans, cpol1_trans
 end
-
 
 function sim_Z_shocks(prim::Primitives, n_sim::Int64)
 
@@ -310,24 +193,49 @@ function K_state(Z_seq::Vector{Int64}, β₀ₗ::Float64, β₁ₗ::Float64, β�
     return K_seq
 end
 
-
-function time_series_k(prim, kpol, n_sim, Z_index, z_index, K_index)
-
-    @unpack nz, na, Z_agg_grid, n_agg, a_grid_log = prim
-
+# Call this function for transition
+function young_2010_transition(prim::Primitives, kpol::Matrix{Float64}, dist::Matrix{Float64})
+ 
+    # Needs to be run for every period
+    @unpack nz, na, trans_mat, a_grid_log = prim
     a_grid = copy(a_grid_log)
-    # Start with 0 capital and associated index
+    # Locate policy function in the grid, i.e. find indeces above and below
+    ind_low = ones(nz,na)
+    for a in 2:na
+        for z in 1:nz
+            ind_low[z,findall(x -> x >= a_grid[a], kpol[z,:])] .=  a
+            ind_low[z,findall(x -> x >= na, ind_low[z,:])] .=  na-1
+        end
+    end
+    
+    ind_up = ind_low .+ 1
 
-    a_sim = zeros(n_sim)
-    for t = 1:2
-        t = 2
-        nodes       = (a_grid,)
-        itp         = interpolate(nodes, kpol[Int(Z_index[t]), Int(K_index[t]), Int(z_index[t]), :], Gridded(Linear()))
-        extrp       = extrapolate(itp,Line())
-        a_sim[t+1]  = extrp(a_sim[t])
+    wabove = ones(nz, na)
+    wbelow = ones(nz, na)
+    
+    # However, policy functions may not be on the grid. Assign share of distribution to gridpoints, what percent of population 
+    # will end up above or below policy function. Shouldn't change much => if it does, make grid finer.
+    for z in 1:nz
+        for i in 1:na
+            wabove[z,i] =  (kpol[z,i] - a_grid[Int(ind_low[z,i])]) / (a_grid[Int(ind_low[z,i]) + 1] - a_grid[Int(ind_low[z,i])])
+            wabove[z,i] = min(wabove[z,i],1)
+            wabove[z,i] = max(wabove[z,i],0)
+            wbelow[z,i] = 1-wabove[z,i]
+        end
+    end 
+
+    # Compute distributional matrix. Here, we do not find invariant distribution but just iteration one period further
+    Γ = zeros(nz, na)
+    for z in 1:nz
+        for i in 1:na
+            # Based on matrix today, where will the lower index be tomorrow
+            Γ[:, Int.(ind_low[z,i])] = Γ[:, Int.(ind_low[z,i])] .+ dist[z,i]*wbelow[z,i]*trans_mat[z,:]
+            # Based on matrix today, where will the upper index be tomorrow
+            Γ[:, Int.(ind_up[z,i])] = Γ[:, Int.(ind_up[z,i])] .+ dist[z,i]*wabove[z,i]*trans_mat[z,:]
+        end
     end
 
-    return 
+    return Γ
 end
 
 
@@ -337,43 +245,71 @@ function solve_general_model(n_sim)
     error = 1
 
     prim = Primitives()
-    agg_k_hh = 0
-    Agg_K_hh = zeros(length(prim.Z_agg_grid), n_agg)
-    kpol = zeros(length(prim.Z_agg_grid), n_agg, prim.nz, prim.na)
-    cpol = zeros(length(prim.Z_agg_grid), n_agg, prim.nz, prim.na)
-    wage = 0
-    #dist = zeros(length(prim.Z_agg_grid), n_agg, prim.nz, prim.na)
-    k_firm = 0
+
+    # Storage
+    wage = zeros(n_sim)
+    r = zeros(n_sim)
+    K_agg = zeros(n_sim)
+
+    # Initial Guess of distribution
+    dist = (1/(prim.nz * prim.na)) * ones(prim.nz, prim.na, n_sim)
+    kpol = ones(prim.nz, prim.na)
+    cpol = ones(prim.nz, prim.na)
+    
+    K_agg[1] = sum(dist[:,:,t].*kpol[:,:])
+
     _, L_Agg = agg_labour(prim)
+    Z_index, _ = sim_Z_shocks(prim, n_sim)
 
     # Guess ALM
-    β₀ₗ, β₁ₗ, β₀ₕ, β₁ₕ = 0.1, 0.1, 0.9, 0.9 
+    KZ_mat = zeros(n_sim, 3)
+    β₀ₗ, β₁ₗ, β₀ₕ, β₁ₕ = 0.1, 0.1, 0.9, 0.9
+    β_vec = [0.1, 0.1, 0.9, 0.9]
 
     while error > prim.tol && count < prim.maxiter
 
         count = count + 1
+        # Compute Aggregate Capital Supply by Households
         
-        # Capital Demand & Wage
-        r, wage = firm_decision(prim, L_Agg)
+        for t in 1:n_sim-1
 
-        for (K_idx, _) in enumerate(prim.K_agg_grid)
-
-            for (Z_idx, _) in enumerate(prim.Z_agg_grid)
-                # Endogenous Grid Method
-                kpol[Z_idx, K_idx,:,:], cpol[Z_idx, K_idx,:,:] = EGM(prim, wage[Z_idx, K_idx], r[Z_idx, K_idx])
+            if Z_index[t] == 1
+                K_agg[t+1] = β₀ₗ + β₁ₗ*K_agg[t]
+            else
+                K_agg[t+1] = β₀ₕ + β₁ₕ*K_agg[t]
             end
+            # Capital Demand & Wage
+            r[t], wage[t] = firm_decision(prim, L_Agg, K_agg[t], prim.Z_agg_grid[Int(Z_index[t])])
+            kpol, cpol = EGM_transition(prim, wage[t], r[t], cpol)
+            dist[:,:,t+1] = young_2010_transition(prim, kpol, dist[:,:,t])
 
         end
 
-        Z_index, z_index = sim_Z_shocks(prim, n_sim)
+        KZ_mat[:,1] = K_agg
+        KZ_mat[:,2] = Z_index
+        KZ_mat[2:10000, 3] = K_agg[1:10000-1]
+
+        KZ_low = KZ_mat[KZ_mat[:,2] .== 1, :]
+        KZ_high = KZ_mat[KZ_mat[:,2] .== 2, :]
+
+        KZ_low_df = DataFrame(KZ_low, :auto)
+        KZ_high_df = DataFrame(KZ_high, :auto)
+        ols_low = lm(@formula(x3~x1), KZ_low_df)
+        ols_high = lm(@formula(x3~x1), KZ_high_df)
+        β_0l = GLM.coef(ols_low)[1]
+        β_1l = GLM.coef(ols_low)[2]
+        β_0h = GLM.coef(ols_high)[1]
+        β_1h = GLM.coef(ols_high)[2]
+        β_vec_model = [GLM.coef(ols_low)[1], GLM.coef(ols_low)[2], GLM.coef(ols_high)[1], GLM.coef(ols_high)[2]]
+
+        error = maximum(abs.(β_vec - β_vec_model))
+        println("Current Error:", error, " at iteration:", count)
+
+        β₀ₗ = deepcopy(β_0l)
+        β₁ₗ = deepcopy(β_1l)
+        β₀ₕ = deepcopy(β_0h)
+        β₁ₕ = deepcopy(β_1h)
         
-        K_index = K_state(Z_index, β₀ₗ, β₁ₗ, β₀ₕ, β₁ₕ, n_sim)
-        #dist[:, :, :, :] = young_2010_continuous(prim, kpol[:, :, :, :])
-
-
-        println("error = ", round.(error; digits=6)," at iteration ", count," with r_egm_1 = ", round.(r_1; digits=4)," and r = ",round.(r; digits=4))                 
-        println("Aggregate Capital Supply = ", round(agg_k_hh; digits=4), " with aggregate Capital Demand = ", round(k_firm; digits=4))          
-
     end
 
     return dist, kpol, agg_k_hh, r, wage
