@@ -434,7 +434,7 @@ function solve_SSJ(shock::Float64, period::Int64)
     return dK
 end
 
-dK = solve_SSJ(-0.1, 1)
+dK = solve_SSJ(-0.1, 10)
 
 # Visualize IRF
 IRF_capital = plot(1:100, dK, label = "IRF of Capital", dpi=300, title = "Temporary shock to productivity")

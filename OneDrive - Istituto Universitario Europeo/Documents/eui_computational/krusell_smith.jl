@@ -140,7 +140,7 @@ function EGM_transition(prim::Primitives, wage::Float64, r::Float64, cpol::Matri
     # Here, we do not find convergence. We just take the previous results and compute the responses.
     # This gives inputs for next period. We simulate the economy sequentionally.
 
-    @unpack nz, na, β, σ, z_grid, trans_mat, a_grid_log  = prim
+    @unpack nz, na, β, σ, z_grid, trans_mat, a_grid_log, Z_mat  = prim
     
     a_grid = copy(a_grid_log)
 
@@ -256,7 +256,7 @@ function krusell_smith(n_sim)
     kpol = ones(prim.nz, prim.na)
     cpol = ones(prim.nz, prim.na)
     
-    K_agg[1] = sum(dist[:,:,t].*kpol[:,:])
+    K_agg[1] = sum(dist[:,:,1].*kpol[:,:])
 
     _, L_Agg = agg_labour(prim)
     Z_index, _ = sim_Z_shocks(prim, n_sim)
@@ -266,22 +266,19 @@ function krusell_smith(n_sim)
     β₀ₗ, β₁ₗ, β₀ₕ, β₁ₕ = 0.1, 0.1, 0.9, 0.9
     β_vec = [0.1, 0.1, 0.9, 0.9]
 
-    while error > prim.tol && count < prim.maxiter
+    while error > 0.001 && count < prim.maxiter
 
         count = count + 1
         # Compute Aggregate Capital Supply by Households
         
         for t in 1:n_sim-1
 
-            if Z_index[t] == 1
-                K_agg[t+1] = β₀ₗ + β₁ₗ*K_agg[t]
-            else
-                K_agg[t+1] = β₀ₕ + β₁ₕ*K_agg[t]
-            end
             # Capital Demand & Wage
             r[t], wage[t] = firm_decision(prim, L_Agg, K_agg[t], prim.Z_agg_grid[Int(Z_index[t])])
             kpol, cpol = EGM_transition(prim, wage[t], r[t], cpol)
+
             dist[:,:,t+1] = young_2010_transition(prim, kpol, dist[:,:,t])
+            K_agg[t+1] = sum(dist[:,:,t+1].*kpol)
 
         end
 
@@ -304,6 +301,7 @@ function krusell_smith(n_sim)
 
         error = maximum(abs.(β_vec - β_vec_model))
         println("Current Error:", error, " at iteration:", count)
+        println(β_0l,", ", β_0h, ", ", β_1l,", ", β_1h)
 
         β₀ₗ = 0.9*β₀ₗ + 0.1*β_0l
         β₁ₗ = 0.9*β₁ₗ + 0.1*β_1l
@@ -317,8 +315,4 @@ end
 
 
 dist, KZ_mat, K_agg, r, Z_index, β_vec_model = krusell_smith(10000)
-
-
-# We are interested in kpol and agg_k_hh
-dist, kpol, agg_k_hh, r, wage = solve_general_model(0.03)
 
