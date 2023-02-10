@@ -17,7 +17,7 @@ function parameter_setup()
     nd = 100
     dmax = 40
     dmin = 0
-    d_grid = exp.( range( log(1+dmin), log(1+dmax), nd)  ) .-1 
+    d_grid = exp.( range( log(1+dmin), log(1+dmax), length=nd)  ) .-1 
 
     ρ = 0.95
     nz = 5
