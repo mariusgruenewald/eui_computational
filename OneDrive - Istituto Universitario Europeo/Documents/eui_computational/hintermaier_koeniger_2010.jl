@@ -82,6 +82,8 @@ end
 
 function d_prime(pm, v_hat_xprime, v_hat_dprime)
 
+    # DISREGARD THIS FUNCTION - ALL RELEVANT PARTS IN OTHER FUNCTION
+
     @unpack nz, nx, z_grid, d_grid, x_grid, dmin, r, δ, dmin = pm
 
     diff_Der = v_hat_dprime - (r + δ).*v_hat_xprime # Wealth at expectation
@@ -157,7 +159,7 @@ function EGM(pm)
         println("==> Marginal Utilities calculated")
 
 
-        # Expected Values
+        # Expected Values at the margin
         for (z_p_idx, _) in enumerate(z_grid)
             v_hat_xprime[:, :, z_idx] = β .* Pr_z[z_idx, z_p_idx] .* MUc[:, :, z_p_idx]
             v_hat_dprime[:, :, z_idx] = β .* Pr_z[z_idx, z_p_idx] .* MUd[:, :, z_p_idx]
@@ -168,6 +170,7 @@ function EGM(pm)
     # If it's an interior solution, this is the outcome.
     diff_Der[:,:, :] = v_hat_dprime - (r + δ).*v_hat_xprime
 
+    for (z_idx, _) in enumerate(z_grid)
     # Let's check if that's actually true
         for (xp_idx, x_prime) in enumerate(x_grid)
             println("Capital Tomorrow: ", xp_idx)
@@ -196,8 +199,8 @@ function EGM(pm)
 
     end
     
-# Read what Robert send (Appendix)
-
+    # Read what Robert send (Appendix)
+    # Auclert Appendix e) egm
     
 
     return 
