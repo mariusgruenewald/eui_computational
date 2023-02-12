@@ -17,7 +17,7 @@ function parameter_setup()
     nd = 100
     dmax = 40
     dmin = 0
-    d_grid = exp.( range( log(1+dmin), log(1+dmax), length=nd)  ) .-1 
+    d_grid = exp.( range( log(1+dmin), log(1+dmax), nd)  ) .-1  # will be created later again same for tauchen...
 
     ρ = 0.95
     nz = 5
@@ -45,7 +45,7 @@ function parameter_setup()
     #k_grid =  range(  kmin , kmax ,nk)
 
     pm = (
-        β = 0.94,       # discount factor
+        β = 0.9391,       # discount factor for comparability
         σ = 2.00,       # CRRA (inverse = IES constant) 
         γ = 0.95,       # utility loss of working 
         r = 0.03,
@@ -155,14 +155,13 @@ function EGM(pm)
         for (x_idx, _) in enumerate(x_grid)
             MUc[:, x_idx, z_idx] = θ .* (c_pol_guess[:, x_idx, z_idx].^θ.*(d_grid .+ ϵ_dur).^(1-θ)).^(-σ) .* (d_grid .+ ϵ_dur).^(1-θ) .* c_pol_guess[:, x_idx, z_idx].^(θ-1)
             MUd[:, x_idx, z_idx] = (1-θ) .* (c_pol_guess[:, x_idx, z_idx].^θ.*(d_grid .+ ϵ_dur).^(1-θ)).^(-σ) .* (d_grid .+ ϵ_dur).^( -θ) .* c_pol_guess[:, x_idx, z_idx].^(θ)
-        end
+
         println("==> Marginal Utilities calculated")
 
 
         # Expected Values at the margin
-        for (z_p_idx, _) in enumerate(z_grid)
-            v_hat_xprime[:, :, z_idx] = β .* Pr_z[z_idx, z_p_idx] .* MUc[:, :, z_p_idx]
-            v_hat_dprime[:, :, z_idx] = β .* Pr_z[z_idx, z_p_idx] .* MUd[:, :, z_p_idx]
+            v_hat_xprime[:, x_idx, z_idx] = β .* MUc[:, x_idx, :] * Pr_z[z_idx, :]
+            v_hat_dprime[:, x_idx, z_idx] = β .* MUd[:, x_idx, :] * Pr_z[z_idx, :] # damn, they are still off :( but better
         end
         println("==> Expected Values of each Asset calculated")
     end
