@@ -107,7 +107,7 @@ function d_prime(pm, v_hat_xprime, v_hat_dprime)
             elseif diff_Der[1, xp_idx, z_idx] <= 0
             # Why only first d' element? Can we say that when it doesn't apply here in no other neither? What about if it applies?
                 d_prime_opt[xp_idx, z_idx] = dmin
-                v_hat_xprimeopt[xp_idx, z_idx] = v_hat_xprime[1, xp_idx, z_idx]
+                
             else # If collateral constraint binds
                 d_prime_opt[xp_idx, z_idx] = (y_gam + x_now)/((1 - μ)*(1 - δ))
                 v_hat_xprimeopt[xp_idx, z_idx] = v_hat_xprime[xp_idx, z_idx]
@@ -147,13 +147,18 @@ function EGM(pm)
     v_hat_xprime = zeros(nd, nx, nz)
     v_hat_dprime = zeros(nd, nx, nz)
     diff_Der = zeros(nd, nx, nz)
-    d_prime_x = zeros(nx, nz)
+
+    d_prime_x = zeros(nx, nz) # storing optimal d'
+    v_hat_xprimeopt = zeros(nx, nz) # storing derivative
+    v_hat_dprimeopt = zeros(nx, nz)
+    kappa_xy = zeros(nx, nz) # lagrange multiplier storage
+
     # Derivative of Marginal Utilities
     for (z_idx, _) in enumerate(z_grid)
         println("Productivity State: ", z_idx)
 
         for (x_idx, _) in enumerate(x_grid)
-            MUc[:, x_idx, z_idx] = θ .* (c_pol_guess[:, x_idx, z_idx].^θ.*(d_grid .+ ϵ_dur).^(1-θ)).^(-σ) .* (d_grid .+ ϵ_dur).^(1-θ) .* c_pol_guess[:, x_idx, z_idx].^(θ-1)
+            MUc[:, x_idx, z_idx] = θ .* (c_pol_guess[:, 1, 1].^θ .*(d_grid .+ ϵ_dur).^(1-θ)).^(-σ) .* (d_grid .+ ϵ_dur).^(1-θ) .* c_pol_guess[:, x_idx, z_idx].^(θ-1)
             MUd[:, x_idx, z_idx] = (1-θ) .* (c_pol_guess[:, x_idx, z_idx].^θ.*(d_grid .+ ϵ_dur).^(1-θ)).^(-σ) .* (d_grid .+ ϵ_dur).^( -θ) .* c_pol_guess[:, x_idx, z_idx].^(θ)
 
         println("==> Marginal Utilities calculated")
@@ -186,13 +191,19 @@ function EGM(pm)
             if  (d_prime_now > dmin) && (d_prime_now < (x_prime + y_gam)/((1 - μ)*(1 - δ)))
                 println("INTERIOR")
                 d_prime_x[xp_idx, z_idx] = d_prime_now
-                v_hat_xprimeopt[xp_idx, z_idx] = extrapolate( interpolate( (d_grid,), log(v_hat_xprime[:, xp_idx]), Gridded(Linear())), Interpolations.Flat() )(d_prime_x[xp_idx, z_idx])
+                v_hat_xprimeopt[xp_idx, z_idx] = extrapolate( interpolate( (d_grid,), log.(v_hat_xprime[:, xp_idx, z_idx]), Gridded(Linear())), Interpolations.Flat() )(d_prime_x[xp_idx, z_idx])
             elseif d_prime_now <= 0
                 println("CORNER NON-NEGATIVITY")
-                d_prime_x[xp_idx, z_idx] = dmin
+                d_prime_x[xp_idx, z_idx] = dmin # Here, we impose (economically) - if optimal d_prime is lower than 0 - the lowest value possible (economically/on the grid)
+                v_hat_xprimeopt[xp_idx, z_idx] = v_hat_xprime[1, xp_idx, z_idx] # No interpolation necessary
             else
-                d_prime_x[xp_idx, z_idx] = (x_prime + y_gam)/((1 - μ)*(1 - δ))
                 println("CORNER COLLATERAL")
+                d_prime_x[xp_idx, z_idx] = (x_prime + y_gam)/((1 - μ)*(1 - δ)) # Impose that we can't get more durables than this
+                # Get optimal derivatives
+                v_hat_xprimeopt[xp_idx, z_idx] = extrapolate( interpolate( (d_grid, ), log.(v_hat_xprime[:, xp_idx, z_idx]) , Gridded(Linear())), Interpolations.Flat() )(d_prime_x[xp_idx, z_idx])
+                v_hat_dprimeopt[xp_idx, z_idx] = extrapolate( interpolate( (d_grid, ), log.(v_hat_dprime[:, xp_idx, z_idx]) , Gridded(Linear())), Interpolations.Flat() )(d_prime_x[xp_idx, z_idx])
+                # See where lagrange multiplier binds
+                kappa_xy[xp_idx, z_idx] =  (1/(1 + r - μ*(1 - δ)))*(v_hat_dprimeopt[xp_idx, z_idx] - (r + δ)*v_hat_xprimeopt[xp_idx, z_idx])
             end
         end
 
