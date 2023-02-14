@@ -121,10 +121,6 @@ function d_prime(pm, v_hat_xprime, v_hat_dprime)
     return
 end
 
-check = diff_Der[:, 2, 1] .- sort(diff_Der[:, 2, 1], rev=true)
-
-check[findall(check .!= 0)]
-
 
 function EGM(pm)
 
@@ -185,7 +181,7 @@ function EGM(pm)
 
             # For given future wealth(assets), find the optimal d' that satisfies Budget Constraint directly with zero (include expected values)
             d_prime_now = extrapolate( interpolate( (current_foc[order],), d_grid[order], Gridded(Linear())), Interpolations.Flat() )(0)
-            println("Optimal Durable As Response: ", d_prime_now)
+            (xp_idx % 25  == 0) ? println("Optimal Durable As Response: ", d_prime_now) : nothing
 
             # If Interior Solution, interpolated on grid and picked point 0
             if  (d_prime_now > dmin) && (d_prime_now < (x_prime + y_gam)/((1 - μ)*(1 - δ)))
@@ -206,8 +202,19 @@ function EGM(pm)
                 kappa_xy[xp_idx, z_idx] =  (1/(1 + r - μ*(1 - δ)))*(v_hat_dprimeopt[xp_idx, z_idx] - (r + δ)*v_hat_xprimeopt[xp_idx, z_idx])
             end
         end
-
     end
+    # End of step 1)
+    Plots.plot(x_grid, d_prime_x, title="next period combinations, d´(x´)")
+
+    # Step 2
+    for (z_idx, _) in enumerate(z_grid)
+        for (d_idx, d_now) in enumerate(d_grid)
+            c_egm
+
+        end
+    end
+
+
     
     # Read what Robert send (Appendix)
     # Auclert Appendix e) egm
