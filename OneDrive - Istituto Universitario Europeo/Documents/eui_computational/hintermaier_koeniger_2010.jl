@@ -133,90 +133,123 @@ function EGM(pm)
         end
     end
 
-    # Here: While Loop
-    a_prime = similar(c_pol_guess)
-    d_prime = similar(c_pol_guess)
-    c_prime = similar(c_pol_guess)
+    iter = 0
+    maxiter = 200
+    tol = 1e-6
+    err = 1
 
-    MUc = zeros(nd, nx, nz)
-    MUd = zeros(nd, nx, nz)
-    v_hat_xprime = zeros(nd, nx, nz)
-    v_hat_dprime = zeros(nd, nx, nz)
-    diff_Der = zeros(nd, nx, nz)
+    while (err > tol) && (iter < maxiter)
+        
+        a_prime = similar(c_pol_guess)
+        d_prime = similar(c_pol_guess)
+        c_prime = similar(c_pol_guess)
 
-    d_prime_x = zeros(nx, nz) # storing optimal d'
-    v_hat_xprimeopt = zeros(nx, nz) # storing derivative
-    v_hat_dprimeopt = zeros(nx, nz)
-    kappa_xy = zeros(nx, nz) # lagrange multiplier storage
+        MUc = zeros(nd, nx, nz)
+        MUd = zeros(nd, nx, nz)
+        v_hat_xprime = zeros(nd, nx, nz)
+        v_hat_dprime = zeros(nd, nx, nz)
+        diff_Der = zeros(nd, nx, nz)
 
-    # Derivative of Marginal Utilities
-    for (z_idx, _) in enumerate(z_grid)
-        println("Productivity State: ", z_idx)
+        d_prime_x = zeros(nx, nz) # storing optimal d'
+        v_hat_xprimeopt = zeros(nx, nz) # storing derivative
+        v_hat_dprimeopt = zeros(nx, nz)
+        kappa_xy = zeros(nx, nz) # lagrange multiplier storage
 
-        for (x_idx, _) in enumerate(x_grid)
-            MUc[:, x_idx, z_idx] = θ .* (c_pol_guess[:, 1, 1].^θ .*(d_grid .+ ϵ_dur).^(1-θ)).^(-σ) .* (d_grid .+ ϵ_dur).^(1-θ) .* c_pol_guess[:, x_idx, z_idx].^(θ-1)
-            MUd[:, x_idx, z_idx] = (1-θ) .* (c_pol_guess[:, x_idx, z_idx].^θ.*(d_grid .+ ϵ_dur).^(1-θ)).^(-σ) .* (d_grid .+ ϵ_dur).^( -θ) .* c_pol_guess[:, x_idx, z_idx].^(θ)
+        # Derivative of Marginal Utilities
+        for (z_idx, _) in enumerate(z_grid)
+            println("Productivity State: ", z_idx)
 
-        println("==> Marginal Utilities calculated")
+            for (x_idx, _) in enumerate(x_grid)
+                MUc[:, x_idx, z_idx] = θ .* (c_pol_guess[:, 1, 1].^θ .*(d_grid .+ ϵ_dur).^(1-θ)).^(-σ) .* (d_grid .+ ϵ_dur).^(1-θ) .* c_pol_guess[:, x_idx, z_idx].^(θ-1)
+                MUd[:, x_idx, z_idx] = (1-θ) .* (c_pol_guess[:, x_idx, z_idx].^θ.*(d_grid .+ ϵ_dur).^(1-θ)).^(-σ) .* (d_grid .+ ϵ_dur).^( -θ) .* c_pol_guess[:, x_idx, z_idx].^(θ)
+
+            println("==> Marginal Utilities calculated")
 
 
-        # Expected Values at the margin
-            v_hat_xprime[:, x_idx, z_idx] = β .* MUc[:, x_idx, :] * Pr_z[z_idx, :]
-            v_hat_dprime[:, x_idx, z_idx] = β .* MUd[:, x_idx, :] * Pr_z[z_idx, :] # damn, they are still off :( but better
+            # Expected Values at the margin
+                v_hat_xprime[:, x_idx, z_idx] = β .* MUc[:, x_idx, :] * Pr_z[z_idx, :]
+                v_hat_dprime[:, x_idx, z_idx] = β .* MUd[:, x_idx, :] * Pr_z[z_idx, :] # damn, they are still off :( but better
+            end
+            println("==> Expected Values of each Asset calculated")
         end
-        println("==> Expected Values of each Asset calculated")
-    end
 
-    # If it's an interior solution, this is the outcome.
-    diff_Der[:,:, :] = v_hat_dprime - (r + δ).*v_hat_xprime
+        # If it's an interior solution, this is the outcome.
+        diff_Der[:,:, :] = v_hat_dprime - (r + δ).*v_hat_xprime
 
-    for (z_idx, _) in enumerate(z_grid)
-    # Let's check if that's actually true
-        for (xp_idx, x_prime) in enumerate(x_grid)
-            println("Capital Tomorrow: ", xp_idx)
+        for (z_idx, _) in enumerate(z_grid)
+        # Let's check if that's actually true
+            for (xp_idx, x_prime) in enumerate(x_grid)
+                println("Capital Tomorrow: ", xp_idx)
 
-            # Sort diff_Der and keep track of the index
-            current_foc = diff_Der[:, xp_idx, z_idx]
-            order = sortperm(diff_Der[:, xp_idx, z_idx], rev=false)
+                # Sort diff_Der and keep track of the index
+                current_foc = diff_Der[:, xp_idx, z_idx]
+                order = sortperm(diff_Der[:, xp_idx, z_idx], rev=false)
 
-            # For given future wealth(assets), find the optimal d' that satisfies Budget Constraint directly with zero (include expected values)
-            d_prime_now = extrapolate( interpolate( (current_foc[order],), d_grid[order], Gridded(Linear())), Interpolations.Flat() )(0)
-            (xp_idx % 25  == 0) ? println("Optimal Durable As Response: ", d_prime_now) : nothing
+                # For given future wealth(assets), find the optimal d' that satisfies Budget Constraint directly with zero (include expected values)
+                d_prime_now = extrapolate( interpolate( (current_foc[order],), d_grid[order], Gridded(Linear())), Interpolations.Flat() )(0)
+                (xp_idx % 25  == 0) ? println("Optimal Durable As Response: ", d_prime_now) : nothing
 
-            # If Interior Solution, interpolated on grid and picked point 0
-            if  (d_prime_now > dmin) && (d_prime_now < (x_prime + y_gam)/((1 - μ)*(1 - δ)))
-                println("INTERIOR")
-                d_prime_x[xp_idx, z_idx] = d_prime_now
-                v_hat_xprimeopt[xp_idx, z_idx] = extrapolate( interpolate( (d_grid,), log.(v_hat_xprime[:, xp_idx, z_idx]), Gridded(Linear())), Interpolations.Flat() )(d_prime_x[xp_idx, z_idx])
-            elseif d_prime_now <= 0
-                println("CORNER NON-NEGATIVITY")
-                d_prime_x[xp_idx, z_idx] = dmin # Here, we impose (economically) - if optimal d_prime is lower than 0 - the lowest value possible (economically/on the grid)
-                v_hat_xprimeopt[xp_idx, z_idx] = v_hat_xprime[1, xp_idx, z_idx] # No interpolation necessary
-            else
-                println("CORNER COLLATERAL")
-                d_prime_x[xp_idx, z_idx] = (x_prime + y_gam)/((1 - μ)*(1 - δ)) # Impose that we can't get more durables than this
-                # Get optimal derivatives
-                v_hat_xprimeopt[xp_idx, z_idx] = extrapolate( interpolate( (d_grid, ), log.(v_hat_xprime[:, xp_idx, z_idx]) , Gridded(Linear())), Interpolations.Flat() )(d_prime_x[xp_idx, z_idx])
-                v_hat_dprimeopt[xp_idx, z_idx] = extrapolate( interpolate( (d_grid, ), log.(v_hat_dprime[:, xp_idx, z_idx]) , Gridded(Linear())), Interpolations.Flat() )(d_prime_x[xp_idx, z_idx])
-                # See where lagrange multiplier binds
-                kappa_xy[xp_idx, z_idx] =  (1/(1 + r - μ*(1 - δ)))*(v_hat_dprimeopt[xp_idx, z_idx] - (r + δ)*v_hat_xprimeopt[xp_idx, z_idx])
+                # If Interior Solution, interpolated on grid and picked point 0
+                if  (d_prime_now > dmin) && (d_prime_now < (x_prime + y_gam)/((1 - μ)*(1 - δ)))
+                    println("INTERIOR")
+                    d_prime_x[xp_idx, z_idx] = d_prime_now
+                    v_hat_xprimeopt[xp_idx, z_idx] = extrapolate( interpolate( (d_grid,), log.(v_hat_xprime[:, xp_idx, z_idx]), Gridded(Linear())), Interpolations.Flat() )(d_prime_x[xp_idx, z_idx])
+                elseif d_prime_now <= 0
+                    println("CORNER NON-NEGATIVITY")
+                    d_prime_x[xp_idx, z_idx] = dmin # Here, we impose (economically) - if optimal d_prime is lower than 0 - the lowest value possible (economically/on the grid)
+                    v_hat_xprimeopt[xp_idx, z_idx] = v_hat_xprime[1, xp_idx, z_idx] # No interpolation necessary
+                else
+                    println("CORNER COLLATERAL")
+                    d_prime_x[xp_idx, z_idx] = (x_prime + y_gam)/((1 - μ)*(1 - δ)) # Impose that we can't get more durables than this
+                    # Get optimal derivatives
+                    v_hat_xprimeopt[xp_idx, z_idx] = extrapolate( interpolate( (d_grid, ), log.(v_hat_xprime[:, xp_idx, z_idx]) , Gridded(Linear())), Interpolations.Flat() )(d_prime_x[xp_idx, z_idx])
+                    v_hat_dprimeopt[xp_idx, z_idx] = extrapolate( interpolate( (d_grid, ), log.(v_hat_dprime[:, xp_idx, z_idx]) , Gridded(Linear())), Interpolations.Flat() )(d_prime_x[xp_idx, z_idx])
+                    # See where lagrange multiplier binds
+                    kappa_xy[xp_idx, z_idx] =  (1/(1 + r - μ*(1 - δ)))*(v_hat_dprimeopt[xp_idx, z_idx] - (r + δ)*v_hat_xprimeopt[xp_idx, z_idx])
+                end
             end
         end
-    end
-    # End of step 1)
-    Plots.plot(x_grid, d_prime_x, title="next period combinations, d´(x´)")
+        # End of step 1)
+        Plots.plot(x_grid, d_prime_x, title="next period combinations, d´(x´)")
 
-    # Step 2
-    for (z_idx, _) in enumerate(z_grid)
-        for (d_idx, d_now) in enumerate(d_grid)
-            c_egm
+        # Step 2 
+        for (z_idx, _) in enumerate(z_grid)
+            for (d_idx, d_now) in enumerate(d_grid) # Given todays durables
 
+                # The next three equation are endogenous grid points. We need to interpolate and extrapolate later.
+
+                # Equation (13) - Optimality condition for consumption
+                c_egm = ((1 + r)/θ .* (v_hat_xprimeopt[:, z_idx] + kappa_xy[:, z_idx]).*(d_now + ϵ_dur).^((θ - 1)*(1-σ))).^(1/(θ*(1 - σ) - 1))
+                # Equation (1) - Definition of assets in terms of total wealth and durables
+                a_prime_EGM = (x_grid .- (1 - δ).*d_prime_x[:,z_idx])./(1 + r)
+                # Back out total wealth from Budget Constraint
+                x_EGM = c_EGM + a_prime_EGM + dprime_xy[:,z_idx] - z_grid[z_idx]
+
+                # where capital on the grid < capital of endogenous grid, we want to have as much (non-durable) consumption as possible
+                # therefore, we know that consume total wealth (both collateral constraint and dprime=d_min are binding)
+                c_pol_new[d_idx, findall(x_grid .< minimum(x_EGM)), z_idx] .= min(c_EGM) .- (minimum(x_EGM) .- x_grid[findall(x_grid .< minimum(x_EGM))])
+
+                # Otherwise, we have to interpolate
+                c_pol_new[d_idx, findall(x_grid .>= minimum(x_EGM)),z_idx] .=  extrapolate( interpolate( (x_EGM, ), c_EGM, Gridded(Linear())), Interpolations.Flat() )(findall(x_grid .>= minimum(x_EGM)))
+                
+                # This here, I don't understand. Why do we extrapolate on the x_grid?????
+                d_prime[d_idx,:,z_idx] .= maximum(extrapolate( interpolate( (x_EGM, ), d_prime_x[:,z_idx], Gridded(Linear()) ), Interpolations.Flat())(x_grid))
+                # Backout future assets as grid points from Budget constraint
+                a_prime[d_idx,:,z_idx] .= x_grid .+ z_grid[z_idx] .- c_pol_new[d_idx,:,z_idx] .- d_prime[d_idx,:,z_idx]
+                # Backout grid point wealth based on wealth definition Eq. (1)
+                x_prime[d_idx,:,z_idx] .= (1+r)*a_prime[d_idx,:,z_idx] + (1-δ)*d_prime[d_idx,:,z_idx]
+
+            end
         end
-    end
 
+        err  = norm( c_pol_guess .- c_pol_new) / (1 + norm(c_pol_guess) )
+        c_pol_guess   = deepcopy(c_pol_new)
 
+        println("Iteration: ", iter, "with error: ", err)
+
+    end 
     
-    # Read what Robert send (Appendix)
+    # Read what Robert sent (Appendix)
     # Auclert Appendix e) egm
     
 
