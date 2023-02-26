@@ -1,5 +1,4 @@
-# This is a replication attempt at the Krusell Smith with EGM
-# Problem Set 1, Computational Methods
+# Toy Model for the second year forum
 # By Marius Gruenewald
 
 #----------------#
@@ -18,10 +17,10 @@
 #import Pkg; Pkg.add("GLM")
 #import Pkg; Pkg.add("StatsFuns")
 
+
 # using Pckg
 
 using BenchmarkTools
-using Plots
 using Random
 using LinearAlgebra
 using Parameters
@@ -30,7 +29,8 @@ using Statistics
 using StatsBase
 using TensorCore
 using StatsFuns
-
+using Interpolations
+using Random
 
 Random.seed!(1234)
 
@@ -42,12 +42,12 @@ function parameter_toy_model()
     a_grid_lin::Vector{Float64} = collect(range(minval, maxval, na))
     #a_grid_log::Vector{Float64} = exp.(LinRange(log(minval+1),log(maxval+1),na)).-1
 
-    z_grid::Vector{Float64} = [1.0]
-    trans_mat_z::Matrix{Float64} = ones(1,1)
+    z_grid::Vector{Float64} = [0.1, 1.0]
+    trans_mat::Array{Float64, 2} = [0.9 0.1; 0.1 0.9]
     nz::Int64 = length(z_grid)
 
     h_rent_min = 1e-10
-    h_rent_max = 5
+    h_rent_max = 10
     n_rent = 20
     h_rent_grid = collect(range(h_rent_min, h_rent_max, n_rent))
 
@@ -63,12 +63,14 @@ function parameter_toy_model()
 
         β = 0.96,
         σ = 2.0,
-        ν = 0.7,
-        δ_h = 0.02,
+        ν = 0.5,
+        δ_h = 0.1,
         Φ = 0.1,
+        s = 0.98,
 
         w = 1,
         r = 0.03,
+        J = 70,
 
         p_own = p_own,
         p_rent = p_rent,
@@ -82,7 +84,7 @@ function parameter_toy_model()
 
         nz = nz,
         z_grid = z_grid,
-        Pr_z = trans_mat_z,
+        Pr_z = trans_mat,
 
         hr_min = h_rent_min,
         hr_max = h_rent_max,
@@ -103,9 +105,9 @@ function util_(prim, c, h, discount)
     @unpack σ, ν, δ_h = prim
 
     if discount == false
-        return ((c.^prim.ν * h.^(1 - prim.ν)).^(1 - prim.σ) .- 1) ./ (1 - prim.σ)
+        return ((c.^prim.ν * (h + 0.0001).^(1 - prim.ν)).^(1 - prim.σ) .- 1) ./ (1 - prim.σ)
     else
-        return ((c.^prim.ν * ((1 - δ_h) * h.^(1 - prim.ν))).^(1 - prim.σ) .- 1) ./ (1 - prim.σ)
+        return ((c.^prim.ν * ((1 - δ_h) * (h + 0.0001).^(1 - prim.ν))).^(1 - prim.σ) .- 1) ./ (1 - prim.σ)
     end
 end
 
@@ -126,173 +128,313 @@ function mortgage_payments(prim, size)
 
 end
 
+function utility_loop(prim)
+    @unpack a_grid, z_grid, h_own_grid, n_own, δ_h, p_own, r, w, J, na, nz = prim
 
-function value_function_step(prim, V)
+    cons_own = zeros(J, na, na, nz, n_own, n_own)
+    util_own = zeros(J, na, na, nz, n_own, n_own)
 
-    @unpack a_grid, z_grid, h_rent_grid, h_own_grid, β, Pr_z, na, nz, n_own, n_rent, δ_h, p_own, p_rent, r, w, Φ = prim
+    for j in 1:J
+        for (k_i, k) in enumerate(a_grid)
+            for (kp_i, kp) in enumerate(a_grid)
+                for (z_i, z) in enumerate(z_grid)
+                    for (h_i, h) in enumerate(h_own_grid)
+                        for (hp_i, hp) in enumerate(h_own_grid)
+                            c_now = w*z + (1+r)*k - kp - p_own*hp + (1-δ_h)*p_own*h
+                            if (c_now >= 0.0)
+                                cons_own[j, k_i, kp_i, z_i, h_i, hp_i] = c_now
+                                util_own[j, k_i, kp_i, z_i, h_i, hp_i] = util_(prim, c_now, h, true)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        println("Utility of all combinations at age ", j)
+
+    end
+
+    return cons_own, util_own
+end
+
+
+
+function value_function(prim, util_own)
+
+    @unpack a_grid, z_grid, h_own_grid, β, Pr_z, na, nz, n_own, δ_h, p_own, r, w, J, s = prim
     
-    V = ones(na, nz)
-    # choice-specific value, 1 = renting, 2 buying, 3 owning
-    V_rent = ones(na, nz, na, n_rent, 3) * -Inf
-    b_prime_0 = mortgage(prim, h_own_grid)
-    mortgage_payment = mortgage_payments(prim, b_prime_0)
+    V = zeros(J, na, n_own, nz)
+    V_next = zeros(na, n_own, nz)
+    # choice-specific value, 1 = renting, 2 buying
+    V_temp = []
+    #b_prime_0 = mortgage(prim, h_own_grid)
+    #mortgage_payment = mortgage_payments(prim, b_prime_0)
 
-    iter = 0
-    tol = 0.0001
-    err = 1.0
-    maxiter = 500
+    pol_a = zeros(J, na, n_own, nz)
+    pol_own = zeros(J, na, n_own, nz)
+    pol_c = zeros(J, na, n_own, nz)
 
-    while (err > tol) && (iter < maxiter)
-
-        iter += 1
-        println(iter," ", err)
+    for j in reverse(1:J-1)
 
         for (z_idx, z) in enumerate(z_grid)
-            
-            EV = V * Pr_z[z_idx, :]
+        
+            for (a_idx, a_now) in enumerate(a_grid)
 
-            for (r_idx, rent_now) in enumerate(h_rent_grid)
+                for (o_idx, own_now) in enumerate(h_own_grid)
 
-                for (b_prime_idx, buy_prime) in enumerate(h_own_grid)
-
-                    #b_prime = (1 - Φ) * p_own * buy_prime
-
-                    for (a_idx, a) in enumerate(a_grid)
-
-                        for (a_prime_idx, a_prime) in enumerate(a_grid)
-
-                            c_rent = w*z + (1+r)*a - a_prime - p_rent*rent_now # renting
-                            c_buy = w*z + (1+r)*a - a_prime - p_rent*rent_now + b_prime_0[b_prime_idx] - Φ * p_own * buy_prime - mortgage_payment[b_prime_idx] #buying
-                            # add owning
-
-                            if (c_rent <= 0.0) & (c_buy <= 0.0) 
-                                break # shortcut due to monotonicity
-
-                            elseif (c_rent <= 0.0)  & (c_buy > 0.0)
-                                V_rent[a_idx, z_idx, a_prime_idx, b_prime_idx, 2] = util_(prim, c_buy, buy_prime, false) + β*EV[a_prime_idx]   
-
-                            elseif (c_rent >= 0.0)  & (c_buy < 0.0)
-                                V_rent[a_idx, z_idx, a_prime_idx, r_idx, 1] = util_(prim, c_rent, rent_now, false) + β*EV[a_prime_idx]
-
-                            else
-                                V_rent[a_idx, z_idx, a_prime_idx, r_idx, 1] = util_(prim, c_rent, rent_now, false) + β*EV[a_prime_idx] 
-                                V_rent[a_idx, z_idx, a_prime_idx, b_prime_idx, 2] = util_(prim, c_buy, buy_prime, false) + β*EV[a_prime_idx]                
-              
-                            end
-
-                        end
-                    
-                    end
-
+                    V_temp = util_own[j, a_idx, :, z_idx, o_idx, :] .+  β * s .* V[j+1, :, :, :] ⊡ Pr_z[z_idx, :]
+                    V_next[a_idx, o_idx, z_idx] = maximum(V_temp)
+                    Opt_ind = argmax(V_temp)
+                    pol_a[j, a_idx, o_idx, z_idx] = Opt_ind[1]
+                    pol_own[j, a_idx, o_idx, z_idx] = Opt_ind[2]
+                    pol_c[j, a_idx, o_idx, z_idx] = w*z + (1+r)*a_now - Opt_ind[1] - p_own*Opt_ind[2] + (1-δ_h)*p_own*own_now
+                
                 end
-
+            
             end
         
         end
-        V_new = maximum(V_rent, dims= (3,4,5) )[:,:,1,1]
 
-        err  = norm( V .- V_new) / (1 + norm(V) )
-        V    = deepcopy(V_new)
+        V[j, :, :, :] = V_next
+        println("Done with age ", j)
 
     end
-    # maximize value function and update distance
-    # maximizing over both choices
-    V_k_new = maximum(V_rent, dims= (3) )[:,:,:,1] # assets choice specific
-    V_h_new = maximum(V_rent, dims= (4) )[:,:,1,:] # discrete choice specific
 
-    return V_new, V_d_new, V_temp
+    return pol_a, pol_own, pol_c, V
 end
 
-V_new = maximum(V_rent, dims= (3,4,5) )[:,:,1,1] 
+function inheritance(prim)
 
-plot(V_new) # Value Function
-plot(maximum(V_rent[:,:,:,:,1], dims = (3,4))[:,:,1,1])
+    @unpack h_own_grid = prim
 
-kpi_di_idx = argmax(V_rent[:,:,:,:,1],dims= (3,4,5) )[:,:,1,1]
-k_pol   = [a_grid[kpi_di_idx[ki,zi][3]] for ki = 1:na, zi=1:nz]
-h_pol   = [h_rent_grid[kpi_di_idx[ki,zi][4]] for ki = 1:na, zi=1:nz] 
-d_pol = [[0,1][kpi_di_idx[ki,zi][5]] for ki = 1:na, zi=1:nz] 
+    new_grid = h_own_grid .+ 1
 
-c_pol   = (1+r).*a_grid.*ones(na, n_rent) - p_rent.* h_pol' .*ones(na, n_rent) .* z_grid'*w   .-  k_pol.*ones(na, n_rent)
+    
 
-plot(k_pol)
-plot(h_pol)
+    return 
+end
 
-function value_function_iter(prim::discrete_params_evs, r::Float64, wage::Float64)
 
-    @unpack a_grid_log, z_grid, β, trans_mat_z, na, nz, Φ, n, tol, maxiter = prim
+function value_function_inheritance(prim, util_own)
 
-    # Storage Space
-    V = ones(na, nz)
-
-    k_pol = zeros(na, nz)
-    c_pol = zeros(na, nz)
-    n_pol = zeros(na, nz)
-
-    # choice-specific value
+    @unpack a_grid, z_grid, h_own_grid, β, Pr_z, na, nz, n_own, δ_h, p_own, r, w, J, s = prim
+    
+    V = zeros(J, na, n_own, nz)
+    V_next = zeros(na, n_own, nz)
+    # choice-specific value, 1 = renting, 2 buying
     V_temp = []
+    #b_prime_0 = mortgage(prim, h_own_grid)
+    #mortgage_payment = mortgage_payments(prim, b_prime_0)
 
-    err = 1
-    count = 1
+    pol_a = zeros(J, na, n_own, nz)
+    pol_own = zeros(J, na, n_own, nz)
+    pol_c = zeros(J, na, n_own, nz)
 
-    while err > tol && count < maxiter
+    inheritance = 1
+    o_idx_new = 0
+    own_new = 0
 
-        count += 1
-        (count%100 == 0) ? println(count," ", err) : nothing
+    for j in reverse(1:J-1)
 
-        V_new, _, V_temp = value_function_step(prim, V, r, wage)
-
-        err = maximum(abs.(V_new - V))
-        V = copy(V_new)
+        for (z_idx, z) in enumerate(z_grid)
         
+            for (a_idx, a_now) in enumerate(a_grid)
+
+                for (o_idx, own_now) in enumerate(h_own_grid)
+
+                    if j == 50
+                        own_new = own_now + inheritance
+                        o_idx_new = argmin(abs.(h_own_grid .- own_new))
+
+                        V_temp = util_own[j, a_idx, :, z_idx, o_idx_new, :] .+  β * s .* V[j+1, :, :, :] ⊡ Pr_z[z_idx, :]
+                        V_next[a_idx, o_idx, z_idx] = maximum(V_temp)
+                        Opt_ind = argmax(V_temp)
+                        pol_a[j, a_idx, o_idx, z_idx] = Opt_ind[1]
+                        pol_own[j, a_idx, o_idx, z_idx] = Opt_ind[2]
+                        pol_c[j, a_idx, o_idx, z_idx] = w*z + (1+r)*a_now - Opt_ind[1] - p_own*Opt_ind[2] + (1-δ_h)*p_own*own_new
+
+                    else
+
+                        V_temp = util_own[j, a_idx, :, z_idx, o_idx, :] .+  β * s .* V[j+1, :, :, :] ⊡ Pr_z[z_idx, :]
+                        V_next[a_idx, o_idx, z_idx] = maximum(V_temp)
+                        Opt_ind = argmax(V_temp)
+                        pol_a[j, a_idx, o_idx, z_idx] = Opt_ind[1]
+                        pol_own[j, a_idx, o_idx, z_idx] = Opt_ind[2]
+                        pol_c[j, a_idx, o_idx, z_idx] = w*z + (1+r)*a_now - Opt_ind[1] - p_own*Opt_ind[2] + (1-δ_h)*p_own*own_now
+                    end
+                
+                end
+            
+            end
+        
+        end
+
+        V[j, :, :, :] = V_next
+        println("Done with age ", j)
+
     end
-    k_pol_idx = argmax(V_temp, dims= (3,4) )[:,:,1,1]
 
-    for a_idx in 1:na
-        for z_idx in 1:nz
-            k_pol[a_idx, z_idx] = a_grid_log[k_pol_idx[a_idx, z_idx][3]]
-            n_pol[a_idx, z_idx] = [0, 1][k_pol_idx[a_idx, z_idx][4]]
-        end 
-    end
-    c_pol = (1+r)*a_grid_log  .+  n_pol .* z_grid'*wage .-  k_pol
-
-    return V, c_pol, k_pol, n_pol
-
+    return pol_a, pol_own, pol_c, V
 end
+
+
+
 
 
 function solve_model()
 
     prim = parameter_toy_model()
-    r = 0.03
-    wage = 1.0
 
-    V, c_pol, k_pol, n_pol = value_function_iter(prim, r, wage)
+    cons_own, util_own = utility_loop(prim)
 
-    return V, c_pol, k_pol, n_pol
+    pol_a, pol_own, pol_c, V = value_function(prim, util_own)
+    pol_a_i, pol_own_i, pol_c_i, V_i = value_function_inheritance(prim, util_own)
+
+    return cons_own, util_own, pol_a, pol_own, pol_c, V, pol_a_i, pol_own_i, pol_c_i, V_i
 
 end
 
-V,c_pol,k_pol,n_pol = solve_model()
+cons_own, util_own, pol_a, pol_own, pol_c, V, pol_a_i, pol_own_i, pol_c_i, V_i = solve_model();
 
-prim = discrete_params_evs()
-a_grid = prim.a_grid_log
-plotly(size=(700,450),lw=2.5) 
+prim = parameter_toy_model();
 
-P1 = plot(title="Value Function",xlabel="assets",ylabel="value"); 
-plot!(a_grid, V, label="w/o EV",legend=false)          
-vline!(a_grid[findall(  [0; diff(n_pol,dims=1)] .!= 0.0 )] ,c=:red,ls=:dot,label="discrete choice",legend=false)    
-  
-P2 = plot(title="Asset Policy",xlabel="assets",ylabel="asset choice");
-plot!(a_grid, k_pol,label="",legend=false)       
-plot!(a_grid, a_grid, ls=:dot, c=:grey, label="45°")
-vline!(a_grid[findall(  [0;diff(n_pol,dims=1)] .!= 0.0 )], c=:red, ls=:dot, label="", legend=false)      
+# Compare 
+Plots.plot(a_grid, [a_grid[Int.(pol_a[20, :, 10, 1])] a_grid[Int.(pol_a_i[20, :, 10, 2])]])
+Plots.plot(h_own_grid, [h_own_grid[Int.(pol_own[45, 80, :, 2])] h_own_grid[Int.(pol_own_i[45, 80, :, 2])]])
 
-P3 = plot(title="Consumption Policy",xlabel="assets",ylabel="consumption choice");
-plot!(a_grid, c_pol,label="",legend=false)   
-vline!(a_grid[findall(  [0;diff(n_pol,dims=1)] .!= 0.0 )], c=:red,ls=:dot,label="", legend=false)   
- 
-P4 = plot(title="Discrete Policy",xlabel="assets",ylabel="probability working");
-plot!(a_grid, n_pol,label="",legend=false)     
 
-plot(P1,P2,P3,P4,size=(900,700),bottom_margin=10Plots.mm,legend=:outertopright)
+Plots.surface(range(prim.amin, prim.amax, prim.na), range(prim.ho_min, prim.ho_max, prim.n_own), V[10, :, :, 1]')
+xlabel!("Asset Grid")
+ylabel!("Housing Grid")
+title!("Value Function at Grid Points")
+
+Plots.surface(range(prim.amin, prim.amax, prim.na), range(prim.ho_min, prim.ho_max, prim.n_own), V[10, :, :, 2]')
+xlabel!("Asset Grid")
+ylabel!("Housing Grid")
+title!("Value Function at Grid Points")
+
+
+
+######################## Surface Plot of Value function
+## Age 20
+Plots.surface(range(prim.amin, prim.amax, prim.na), range(prim.ho_min, prim.ho_max, prim.n_own), V[20, :, :, 1]')
+xlabel!("Asset Grid")
+ylabel!("Housing Grid")
+title!("Value Function at Grid Points")
+Plots.surface(range(prim.amin, prim.amax, prim.na), range(prim.ho_min, prim.ho_max, prim.n_own), V[20, :, :, 2]')
+xlabel!("Asset Grid")
+ylabel!("Housing Grid")
+title!("Value Function at Grid Points")
+
+## Age 40
+Plots.surface(range(prim.amin, prim.amax, prim.na), range(prim.ho_min, prim.ho_max, prim.n_own), V[40, :, :, 1]')
+xlabel!("Asset Grid")
+ylabel!("Housing Grid")
+title!("Value Function at Grid Points")
+Plots.surface(range(prim.amin, prim.amax, prim.na), range(prim.ho_min, prim.ho_max, prim.n_own), V[40, :, :, 2]')
+xlabel!("Asset Grid")
+ylabel!("Housing Grid")
+title!("Value Function at Grid Points")
+
+## Age 60
+Plots.surface(range(prim.amin, prim.amax, prim.na), range(prim.ho_min, prim.ho_max, prim.n_own), V[60, :, :, 1]')
+xlabel!("Asset Grid")
+ylabel!("Housing Grid")
+title!("Value Function at Grid Points")
+Plots.surface(range(prim.amin, prim.amax, prim.na), range(prim.ho_min, prim.ho_max, prim.n_own), V[60, :, :, 2]')
+xlabel!("Asset Grid")
+ylabel!("Housing Grid")
+title!("Value Function at Grid Points")
+
+
+
+############################ Plotting Policy Functions ##########################################
+############### Capital
+
+mesh_grid = a_grid * h_own_grid'
+
+## Age 20
+Plots.surface(range(prim.amin, prim.amax, prim.na), range(prim.ho_min, prim.ho_max, prim.n_own), mesh_grid[Int.(pol_a[20, :, :, 2])]')
+Plots.plot(a_grid, [a_grid[Int.(pol_a[20, :, 10, 1])] a_grid[Int.(pol_a[20, :, 10, 2])]])
+Plots.plot(a_grid, [a_grid[Int.(pol_a[20, :, 19, 1])] a_grid[Int.(pol_a[20, :, 19, 2])]])
+
+# Age 40
+Plots.plot(a_grid, [a_grid[Int.(pol_a[40, :, 2, 1])] a_grid[Int.(pol_a[40, :, 2, 2])]])
+Plots.plot(a_grid, [a_grid[Int.(pol_a[40, :, 10, 1])] a_grid[Int.(pol_a[40, :, 10, 2])]])
+Plots.plot(a_grid, [a_grid[Int.(pol_a[40, :, 19, 1])] a_grid[Int.(pol_a[40, :, 19, 2])]])
+
+# Age 60
+Plots.plot(a_grid, [a_grid[Int.(pol_a[60, :, 2, 1])] a_grid[Int.(pol_a[60, :, 2, 2])]])
+Plots.plot(a_grid, [a_grid[Int.(pol_a[60, :, 10, 1])] a_grid[Int.(pol_a[60, :, 10, 2])]])
+Plots.plot(a_grid, [a_grid[Int.(pol_a[60, :, 19, 1])] a_grid[Int.(pol_a[60, :, 19, 2])]])
+
+
+############### Housing
+## Age 20
+Plots.plot(h_own_grid, [h_own_grid[Int.(pol_own[20, 2, :, 1])] h_own_grid[Int.(pol_own[20, 2, :, 2])]])
+Plots.plot(h_own_grid, [h_own_grid[Int.(pol_own[20, 10, :, 1])] h_own_grid[Int.(pol_own[20, 10, :, 2])]])
+Plots.plot(h_own_grid, [h_own_grid[Int.(pol_own[20, 19, :, 1])] h_own_grid[Int.(pol_own[20, 19, :, 2])]])
+
+# Age 40
+Plots.plot(h_own_grid, [h_own_grid[Int.(pol_own[40, 2, :, 1])] h_own_grid[Int.(pol_own[40, 2, :, 2])]])
+Plots.plot(h_own_grid, [h_own_grid[Int.(pol_own[40, 10, :, 1])] h_own_grid[Int.(pol_own[40, 10, :, 2])]])
+Plots.plot(h_own_grid, [h_own_grid[Int.(pol_own[40, 19, :, 1])] h_own_grid[Int.(pol_own[40, 19, :, 2])]])
+
+# Age 60
+Plots.plot(h_own_grid, [h_own_grid[Int.(pol_own[60, 2, :, 1])] h_own_grid[Int.(pol_own[60, 2, :, 2])]])
+Plots.plot(h_own_grid, [h_own_grid[Int.(pol_own[60, 10, :, 1])] h_own_grid[Int.(pol_own[60, 10, :, 2])]])
+Plots.plot(h_own_grid, [h_own_grid[Int.(pol_own[60, 19, :, 1])] h_own_grid[Int.(pol_own[60, 19, :, 2])]])
+
+
+########################### Aggregate Outcomes ##################
+
+N = 1000
+
+
+s_rand = rand(Random.seed!(1234),N, prim.J)
+
+# create identifier where they die
+death_age = zeros(N)
+death_age[:] .= 71
+for sim = 1:N
+    for age = 2:J
+        if s_rand[sim,age] > prim.s
+            death_age[sim] = age
+            break
+        end
+    end
+end
+
+
+
+# Compute Invariant Distribution
+function invariant_prod_dist(prim)
+
+    @unpack nz, z_grid, Pr_z = prim
+
+    Phi_sd = ones(1,nz)/nz
+    diff = 1
+    tol::Float64 = 0.0000001;
+    while abs(diff) > tol
+        Phi_sd1 = Phi_sd*Pr_z
+        diff = (Phi_sd1-Phi_sd)[argmax(Phi_sd1-Phi_sd)]
+        Phi_sd = Phi_sd1
+    end
+
+    z_grid = z_grid./(z_grid' *Phi_sd[1,:])
+
+    return Phi_sd[1,:], z_grid
+end
+
+prod_dist, _ = invariant_prod_dist(prim)
+
+# Simulate sequence of shocks
+z_path_index = ones(N, J)
+z_path_index[Int.(N/2):end, 1] .= 2
+
+for n in 1:N
+    for t in 2:J-1
+        z_path_index[n,t] = sample(1:nz, Weights(prim.Pr_z[Int.(z_path_index[n, t-1]),:]))
+    end
+end
+

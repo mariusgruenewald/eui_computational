@@ -40,7 +40,7 @@ function parameter_setup()
     # capital grid
     μ, δ = 0.97, 0.02
     xmin, xmax = -y_gam + (1 - μ)*(1 - δ)*dmin, 60.
-    nx = 225
+    nx = 100
     x_grid = exp.( exp.(exp.( range(0, log( log( log(xmax - xmin + 1) +1) +1), nx)  ) .-1 ) .-1) .-1 .+ xmin
     #k_grid =  range(  kmin , kmax ,nk)
 
@@ -174,20 +174,25 @@ function EGM(pm)
         end
 
         # If it's an interior solution, this is the outcome.
-        diff_Der[:,:, :] = v_hat_dprime - (r + δ).*v_hat_xprime
+        diff_Der[:, :, :] = v_hat_dprime .- (r + δ).*v_hat_xprime
+        d_prime_now = 0
+
+        check = sortperm( v_hat_dprime[:, 1, 1] .- (r + δ).*v_hat_xprime[:, 1, 1], rev=false)
+        test = collect(reverse(1:100)) - check
+        findall(!iszero, test)
 
         for (z_idx, _) in enumerate(z_grid)
         # Let's check if that's actually true
             for (xp_idx, x_prime) in enumerate(x_grid)
-                println("Capital Tomorrow: ", xp_idx)
+                println("Capital Tomorrow: ", x_prime)
 
                 # Sort diff_Der and keep track of the index
                 current_foc = diff_Der[:, xp_idx, z_idx]
-                order = sortperm(diff_Der[:, xp_idx, z_idx], rev=false)
+                order_2 = sortperm(current_foc, rev=false)
 
                 # For given future wealth(assets), find the optimal d' that satisfies Budget Constraint directly with zero (include expected values)
-                d_prime_now = extrapolate( interpolate( (current_foc[order],), d_grid[order], Gridded(Linear())), Interpolations.Flat() )(0)
-                (xp_idx % 25  == 0) ? println("Optimal Durable As Response: ", d_prime_now) : nothing
+                d_prime_now = extrapolate( interpolate( (current_foc[order_2],), d_grid[order_2], Gridded(Linear())), Interpolations.Flat() )(0)
+                (xp_idx % 10  == 0) ? println("Optimal Durable As Response: ", d_prime_now) : nothing
 
                 # If Interior Solution, interpolated on grid and picked point 0
                 if  (d_prime_now > dmin) && (d_prime_now < (x_prime + y_gam)/((1 - μ)*(1 - δ)))
@@ -217,9 +222,9 @@ function EGM(pm)
             for (d_idx, d_now) in enumerate(d_grid) # Given todays durables
 
                 # The next three equation are endogenous grid points. We need to interpolate and extrapolate later.
-
+                #minimum((1 + r)/θ .* (v_hat_xprimeopt[:, 1] + kappa_xy[:, 1]).*(d_grid[1] + ϵ_dur).^((θ - 1)*(1-σ)))
                 # Equation (13) - Optimality condition for consumption
-                c_egm = ((1 + r)/θ .* (v_hat_xprimeopt[:, z_idx] + kappa_xy[:, z_idx]).*(d_now + ϵ_dur).^((θ - 1)*(1-σ))).^(1/(θ*(1 - σ) - 1))
+                c_egm = ((1 + r)/θ .* (v_hat_xprimeopt[:, 1] + kappa_xy[:, 1]).*(d_grid[1] + ϵ_dur).^((θ - 1)*(1-σ))).^(1/(θ*(1 - σ) - 1))
                 # Equation (1) - Definition of assets in terms of total wealth and durables
                 a_prime_EGM = (x_grid .- (1 - δ).*d_prime_x[:,z_idx])./(1 + r)
                 # Back out total wealth from Budget Constraint
